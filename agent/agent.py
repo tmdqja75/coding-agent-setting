@@ -44,7 +44,7 @@ async def decide_node(state: AgentState) -> dict:
     if action == "ask_question":
         return {"next_question": parsed.get("question"), "phase": "clarify"}
     elif action == "search_apis":
-        return {"phase": "search", "_pending_queries": parsed.get("queries", []), "next_question": None}
+        return {"phase": "search", "pending_queries": parsed.get("queries", []), "next_question": None}
     elif action == "build_zip":
         return {"phase": "build", "next_question": None}
 
@@ -52,7 +52,7 @@ async def decide_node(state: AgentState) -> dict:
 
 
 async def search_node(state: AgentState) -> dict:
-    queries = state.get("_pending_queries", [])
+    queries = state.get("pending_queries", [])
     results = dict(state.get("search_results", {}))
 
     async def run_searches(query: str) -> dict:
@@ -148,7 +148,7 @@ def build_graph():
 
     builder.add_edge(START, "decide")
     builder.add_conditional_edges("decide", route, ["search", "build_zip", END])
-    builder.add_edge("search", "decide")
+    builder.add_edge("search", "build_zip")
     builder.add_edge("build_zip", END)
 
     return builder.compile(checkpointer=InMemorySaver())

@@ -57,6 +57,7 @@ async def chat(req: ChatRequest):
             "messages": [HumanMessage(content=req.message)],
             "context": {},
             "search_results": {},
+            "pending_queries": [],
             "phase": "clarify",
             "next_question": None,
             "zip_bytes": None,
