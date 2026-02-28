@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
+from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage
 from agent import build_graph
 
@@ -17,7 +18,7 @@ async def test_graph_returns_question_on_first_message():
     mock_ai_response = MagicMock()
     mock_ai_response.content = '{"action": "ask_question", "question": "어떤 기술 스택을 사용하시나요?"}'
 
-    with patch("agent.llm.ainvoke", new_callable=AsyncMock, return_value=mock_ai_response):
+    with patch.object(ChatAnthropic, "ainvoke", new_callable=AsyncMock, return_value=mock_ai_response):
         state = await graph.ainvoke(
             {"messages": [HumanMessage(content="프론트엔드 앱을 만들고 싶어요")],
              "context": {}, "search_results": {}, "phase": "clarify",
