@@ -69,90 +69,28 @@ async def search_node(state: AgentState) -> dict:
     return {"search_results": results}
 
 
-async def _curate_results(messages: list, search_results: dict) -> dict:
-    """Ask the LLM to select relevant items from raw search results."""
-    # Collect unique candidates across all queries
-    seen_skill_ids: set[str] = set()
-    seen_plugin_ids: set[str] = set()
-    seen_mcp_names: set[str] = set()
-    all_skills, all_plugins, all_mcp = [], [], []
-
-    for query_results in search_results.values():
-        for s in query_results.get("skills", []):
-            if s["id"] not in seen_skill_ids:
-                seen_skill_ids.add(s["id"])
-                all_skills.append({"name": s["name"], "description": s.get("description", ""), "rawFileUrl": s.get("metadata", {}).get("rawFileUrl")})
-        for p in query_results.get("plugins", []):
-            if p["id"] not in seen_plugin_ids:
-                seen_plugin_ids.add(p["id"])
-                all_plugins.append({"name": p["name"], "description": p.get("description", "")})
-        for m in query_results.get("mcp", []):
-            name = m.get("name", "")
-            if name not in seen_mcp_names:
-                seen_mcp_names.add(name)
-                all_mcp.append(m)
-
-    curate_prompt = f"""Based on the user's project requirements from the conversation, select ONLY the relevant items.
-
-Available skills:
-{json.dumps([{"name": s["name"], "description": s["description"]} for s in all_skills], ensure_ascii=False, indent=2)}
-
-Available plugins:
-{json.dumps([{"name": p["name"], "description": p["description"]} for p in all_plugins], ensure_ascii=False, indent=2)}
-
-Available MCP servers:
-{json.dumps([{"name": m.get("name"), "description": m.get("description", "")} for m in all_mcp], ensure_ascii=False, indent=2)}
-
-Reply with JSON only:
-{{"selected_skills": ["name1", "name2"], "selected_plugins": ["name1"], "selected_mcp": ["name1"]}}
-
-Select only items genuinely useful for this specific project. Omit frontend/UI tools if the project is not a frontend project."""
-
-    response = await llm.ainvoke([*messages, {"role": "user", "content": curate_prompt}])
-    try:
-        selected = json.loads(response.content)
-    except json.JSONDecodeError:
-        # Fallback: keep all candidates if curation fails
-        selected = {
-            "selected_skills": [s["name"] for s in all_skills[:3]],
-            "selected_plugins": [p["name"] for p in all_plugins[:2]],
-            "selected_mcp": [m.get("name") for m in all_mcp[:3]],
-        }
-
-    selected_skill_names = set(selected.get("selected_skills", []))
-    selected_plugin_names = set(selected.get("selected_plugins", []))
-    selected_mcp_names = set(selected.get("selected_mcp", []))
-
-    return {
-        "skills": [s for s in all_skills if s["name"] in selected_skill_names],
-        "plugins": [p for p in all_plugins if p["name"] in selected_plugin_names],
-        "mcp": [m for m in all_mcp if m.get("name") in selected_mcp_names],
-    }
-
-
 async def build_zip_node(state: AgentState) -> dict:
     search_results = state.get("search_results", {})
 
-    curated = await _curate_results(state["messages"], search_results)
-
-    mcp_servers: list[dict] = curated["mcp"]
+    mcp_servers: list[dict] = []
     skill_files: list[tuple[str, str]] = []
     agent_files: list[tuple[str, str]] = []
 
-    for skill in curated["skills"]:
-        raw_url = skill.get("rawFileUrl")
-        if raw_url:
-            try:
-                content = await download_file(raw_url)
-                skill_files.append((skill["name"], content))
-            except Exception:
-                pass
-
-    for plugin in curated["plugins"]:
-        for agent_name in (plugin.get("agents") or "").split(","):
-            agent_name = agent_name.strip()
-            if agent_name:
-                agent_files.append((agent_name, f"# {agent_name} subagent\n"))
+    for query_results in search_results.values():
+        mcp_servers.extend(query_results.get("mcp", [])[:3])
+        for skill in query_results.get("skills", [])[:2]:
+            raw_url = skill.get("metadata", {}).get("rawFileUrl") or skill.get("sourceUrl")
+            if raw_url:
+                try:
+                    content = await download_file(raw_url)
+                    skill_files.append((skill["name"], content))
+                except Exception:
+                    pass
+        for plugin in query_results.get("plugins", [])[:1]:
+            for agent_name in (plugin.get("metadata", {}).get("agents") or "").split(","):
+                agent_name = agent_name.strip()
+                if agent_name:
+                    agent_files.append((agent_name, f"# {agent_name} subagent\n"))
 
     mcp_config: dict = {"mcpServers": {}}
     for server in mcp_servers:
