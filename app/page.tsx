@@ -11,7 +11,7 @@ export default function Home() {
   };
 
   const handleSecondaryClick = () => {
-    router.push("/claude-code-components");
+    router.push("/setup");
   };
 
   return (
