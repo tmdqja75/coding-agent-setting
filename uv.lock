@@ -131,7 +131,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = "==0.115.6" },
-    { name = "httpx", specifier = "==0.28.1" },
+    { name = "httpx", extras = ["test"], specifier = "==0.28.1" },
     { name = "langchain-anthropic", specifier = ">=0.3.3" },
     { name = "langgraph", specifier = "==1.0.10" },
     { name = "python-dotenv", specifier = "==1.0.1" },
