@@ -8,6 +8,19 @@ from langchain_core.messages import HumanMessage
 
 load_dotenv()
 
+# Observability — configure via .env
+_langfuse_secret = os.getenv("LANGFUSE_SECRET_KEY")
+_langsmith_key = os.getenv("LANGSMITH_API_KEY")
+
+if _langfuse_secret:
+    from langfuse.callback import CallbackHandler as LangfuseCallback
+    _obs_callback = LangfuseCallback()
+elif _langsmith_key:
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    _obs_callback = None  # LangSmith uses env vars automatically
+else:
+    _obs_callback = None
+
 from agent import build_graph
 
 graph = build_graph()
@@ -35,7 +48,9 @@ def health():
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
-    config = {"configurable": {"thread_id": req.thread_id}}
+    config: dict = {"configurable": {"thread_id": req.thread_id}}
+    if _obs_callback:
+        config["callbacks"] = [_obs_callback]
 
     state = await graph.ainvoke(
         {
