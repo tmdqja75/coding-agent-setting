@@ -21,7 +21,7 @@ Always respond with valid JSON in one of these formats:
 {"action": "ask_question", "question": "<your question in Korean>"}
 
 2. To search the registries:
-{"action": "search_apis", "queries": ["<query1>", "<query2>"]}
+{"action": "search_apis", "queries": ["<query1>", "<query2>"], "project_context": {"type": "<project type>", "stack": ["<tech1>"], "workflows": ["<workflow1>"]}}
 
 3. To build the zip (when you have enough context):
 {"action": "build_zip"}
@@ -44,7 +44,12 @@ async def decide_node(state: AgentState) -> dict:
     if action == "ask_question":
         return {"next_question": parsed.get("question"), "phase": "clarify"}
     elif action == "search_apis":
-        return {"phase": "search", "pending_queries": parsed.get("queries", []), "next_question": None}
+        return {
+            "phase": "search",
+            "pending_queries": parsed.get("queries", []),
+            "context": parsed.get("project_context", {}),
+            "next_question": None,
+        }
     elif action == "build_zip":
         return {"phase": "build", "next_question": None}
 
@@ -69,12 +74,98 @@ async def search_node(state: AgentState) -> dict:
     return {"search_results": results}
 
 
+GENERATE_SUBAGENTS_PROMPT = """You are a Claude Code configuration expert. Based on the user's
+project context and available tools found by search, decide whether custom subagents would be
+useful and generate them if so.
+
+Output a JSON array. If no subagents are needed, return an empty array: []
+
+If subagents are useful, return 2-4 definitions:
+[
+  {
+    "name": "kebab-case-name",
+    "description": "Specific trigger description for when Claude should delegate here",
+    "tools": ["Read", "Grep", "Glob"],
+    "model": "haiku",
+    "system_prompt": "Focused system prompt for this agent..."
+  }
+]
+
+Rules:
+- Only generate subagents that solve real, recurring tasks for the given project
+- Use the minimum tools needed (principle of least privilege)
+- model: "haiku" for fast/cheap lookup tasks, "sonnet" for reasoning tasks, "opus" for complex work
+- If the project is simple or has no clear recurring workflows, return []
+- Available tools: Read, Write, Edit, Bash, Glob, Grep, Agent
+- Write the "system_prompt" field in Korean"""
+
+
+async def generate_subagents_node(state: AgentState) -> dict:
+    context = state.get("context", {})
+    search_results = state.get("search_results", {})
+
+    found_mcps = []
+    found_skills = []
+    found_plugins = []
+    for q, r in search_results.items():
+        found_mcps.extend([s.get("name") for s in r.get("mcp", [])[:3]])
+        found_skills.extend([s.get("name") for s in r.get("skills", [])[:2]])
+        found_plugins.extend([p.get("name") for p in r.get("plugins", [])[:1]])
+
+    user_message = f"""Project context: {json.dumps(context)}
+
+Available MCP servers: {found_mcps}
+Available skills: {found_skills}
+Available plugins: {found_plugins}
+
+Generate subagents for this project, or return [] if none are needed."""
+
+    response = await llm.ainvoke(
+        [SystemMessage(content=GENERATE_SUBAGENTS_PROMPT), HumanMessage(content=user_message)]
+    )
+
+    try:
+        raw = response.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```", 2)[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.rstrip("`").strip()
+        definitions = json.loads(raw)
+        if not isinstance(definitions, list):
+            definitions = []
+    except (json.JSONDecodeError, ValueError):
+        definitions = []
+
+    agent_files: list[tuple[str, str]] = []
+    for defn in definitions:
+        name = defn.get("name", "").strip()
+        if not name:
+            continue
+        tools_list = ", ".join(defn.get("tools", []))
+        model = defn.get("model", "inherit")
+        description = defn.get("description", "")
+        system_prompt = defn.get("system_prompt", "")
+        content = (
+            f"---\n"
+            f"name: {name}\n"
+            f"description: {description}\n"
+            f"tools: {tools_list}\n"
+            f"model: {model}\n"
+            f"---\n\n"
+            f"{system_prompt}\n"
+        )
+        agent_files.append((name, content))
+
+    return {"generated_agents": agent_files}
+
+
 async def build_zip_node(state: AgentState) -> dict:
     search_results = state.get("search_results", {})
+    agent_files = state.get("generated_agents", [])
 
     mcp_servers: list[dict] = []
     skill_files: list[tuple[str, str]] = []
-    agent_files: list[tuple[str, str]] = []
 
     for query_results in search_results.values():
         mcp_servers.extend(query_results.get("mcp", [])[:3])
@@ -86,11 +177,6 @@ async def build_zip_node(state: AgentState) -> dict:
                     skill_files.append((skill["name"], content))
                 except Exception:
                     pass
-        for plugin in query_results.get("plugins", [])[:1]:
-            for agent_name in (plugin.get("metadata", {}).get("agents") or "").split(","):
-                agent_name = agent_name.strip()
-                if agent_name:
-                    agent_files.append((agent_name, f"# {agent_name} subagent\n"))
 
     mcp_config: dict = {"mcpServers": {}}
     for server in mcp_servers:
@@ -115,9 +201,10 @@ async def build_zip_node(state: AgentState) -> dict:
     claude_md_lines += ["", "## Skills"]
     for name, _ in skill_files:
         claude_md_lines.append(f"- {name}")
-    claude_md_lines += ["", "## Subagents"]
-    for name, _ in agent_files:
-        claude_md_lines.append(f"- {name}")
+    if agent_files:
+        claude_md_lines += ["", "## Subagents"]
+        for name, _ in agent_files:
+            claude_md_lines.append(f"- {name}")
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -144,11 +231,13 @@ def build_graph():
     builder = StateGraph(AgentState)
     builder.add_node("decide", decide_node)
     builder.add_node("search", search_node)
+    builder.add_node("generate_subagents", generate_subagents_node)
     builder.add_node("build_zip", build_zip_node)
 
     builder.add_edge(START, "decide")
     builder.add_conditional_edges("decide", route, ["search", "build_zip", END])
-    builder.add_edge("search", "build_zip")
+    builder.add_edge("search", "generate_subagents")
+    builder.add_edge("generate_subagents", "build_zip")
     builder.add_edge("build_zip", END)
 
     return builder.compile(checkpointer=InMemorySaver())

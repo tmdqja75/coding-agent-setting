@@ -52,8 +52,13 @@ async def chat(req: ChatRequest):
     if _obs_callback:
         config["callbacks"] = [_obs_callback]
 
-    state = await graph.ainvoke(
-        {
+    existing = await graph.aget_state(config)
+    if existing.values:
+        # Continuation: only add the new message; preserve all checkpointed state
+        input_state = {"messages": [HumanMessage(content=req.message)]}
+    else:
+        # New thread: initialize full state
+        input_state = {
             "messages": [HumanMessage(content=req.message)],
             "context": {},
             "search_results": {},
@@ -61,9 +66,9 @@ async def chat(req: ChatRequest):
             "phase": "clarify",
             "next_question": None,
             "zip_bytes": None,
-        },
-        config,
-    )
+        }
+
+    state = await graph.ainvoke(input_state, config)
 
     zip_bytes = state.get("zip_bytes")
     if zip_bytes:
