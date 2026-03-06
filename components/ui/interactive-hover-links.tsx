@@ -1,8 +1,13 @@
 "use client";
 
-import { useMotionValue, motion, useSpring, useTransform } from "motion/react";
+import {
+  useMotionValue,
+  motion,
+  useSpring,
+  useTransform,
+} from "motion/react";
 import React, { useRef } from "react";
-import { ArrowRight } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 import { TbPlugConnected } from "react-icons/tb";
 import { FaRobot } from "react-icons/fa";
 import { GiFishingHook } from "react-icons/gi";
@@ -16,10 +21,10 @@ export function InteractiveHoverLinks({
   links = INTERACTIVE_LINKS,
 }: InteractiveHoverLinksProps) {
   return (
-    <section className="bg-background p-4 md:px-8 md:py-16 w-full">
-      <div className="mx-auto max-w-5xl">
-        {links.map((link) => (
-          <Link key={link.heading} {...link} />
+    <section style={{ width: "100%", padding: "0 2rem 6rem" }}>
+      <div style={{ margin: "0 auto", maxWidth: "72rem" }}>
+        {links.map((link, i) => (
+          <HoverLink key={link.heading} {...link} index={i} />
         ))}
       </div>
     </section>
@@ -31,16 +36,25 @@ interface LinkProps {
   icon: React.ElementType;
   subheading: string;
   href: string;
+  accentColor: string;
+  index: number;
 }
 
-function Link({ heading, icon: Icon, subheading, href }: LinkProps) {
+function HoverLink({
+  heading,
+  icon: Icon,
+  subheading,
+  href,
+  accentColor,
+  index,
+}: LinkProps) {
   const ref = useRef<HTMLAnchorElement | null>(null);
 
   const x = useMotionValue(0);
   const y = useMotionValue(0);
 
-  const mouseXSpring = useSpring(x);
-  const mouseYSpring = useSpring(y);
+  const mouseXSpring = useSpring(x, { stiffness: 200, damping: 30 });
+  const mouseYSpring = useSpring(y, { stiffness: 200, damping: 30 });
 
   const top = useTransform(mouseYSpring, [0.5, -0.5], ["40%", "60%"]);
   const left = useTransform(mouseXSpring, [0.5, -0.5], ["60%", "40%"]);
@@ -49,16 +63,8 @@ function Link({ heading, icon: Icon, subheading, href }: LinkProps) {
     e: React.MouseEvent<HTMLAnchorElement, MouseEvent>
   ) => {
     const rect = ref.current!.getBoundingClientRect();
-
-    const width = rect.width;
-    const height = rect.height;
-
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-
-    const xPct = mouseX / width - 0.5;
-    const yPct = mouseY / height - 0.5;
-
+    const xPct = (e.clientX - rect.left) / rect.width - 0.5;
+    const yPct = (e.clientY - rect.top) / rect.height - 0.5;
     x.set(xPct);
     y.set(yPct);
   };
@@ -74,9 +80,46 @@ function Link({ heading, icon: Icon, subheading, href }: LinkProps) {
       }}
       initial="initial"
       whileHover="whileHover"
-      className="group relative flex items-center justify-between border-b-2 border-muted py-4 transition-all duration-500 hover:border-foreground  md:py-8"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        borderBottom: "1px solid #141414",
+        padding: "2.25rem 0",
+        position: "relative",
+        textDecoration: "none",
+      }}
     >
-      <div>
+      {/* Index label */}
+      <motion.span
+        variants={{
+          initial: { opacity: 0.25 },
+          whileHover: { opacity: 1, color: accentColor },
+        }}
+        style={{
+          fontFamily: "'Courier New', monospace",
+          fontSize: "2rem",
+          letterSpacing: "0.2em",
+          color: "#3a3530",
+          marginRight: "2rem",
+          flexShrink: 0,
+          display: "none",
+          paddingTop: "0.3rem",
+          transition: "color 0.3s",
+        }}
+        className="index-label"
+      >
+        {String(index + 1).padStart(2, "0")}
+      </motion.span>
+
+      <style>{`
+        @media (min-width: 640px) {
+          .index-label { display: block !important; }
+        }
+      `}</style>
+
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {/* Heading */}
         <motion.span
           variants={{
             initial: { x: 0 },
@@ -84,57 +127,100 @@ function Link({ heading, icon: Icon, subheading, href }: LinkProps) {
           }}
           transition={{
             type: "spring",
-            staggerChildren: 0.075,
-            delayChildren: 0.25,
+            staggerChildren: 0.04,
+            delayChildren: 0.1,
           }}
-          className="relative z-10 block text-4xl font-bold text-muted-foreground transition-colors duration-500 group-hover:text-foreground md:text-6xl"
+          style={{
+            display: "block",
+            fontFamily: "'Georgia', 'Palatino Linotype', Palatino, serif",
+            fontSize: "clamp(2.25rem, 5.5vw, 4.5rem)",
+            fontWeight: 700,
+            lineHeight: 0.95,
+            letterSpacing: "-0.025em",
+          }}
         >
           {heading.split("").map((l, i) => (
             <motion.span
               variants={{
-                initial: { x: 0 },
-                whileHover: { x: 16 },
+                initial: { x: 0, color: "#7a7270" },
+                whileHover: { x: 16, color: "#f0ebe0" },
               }}
-              transition={{ type: "spring" }}
-              className="inline-block"
+              transition={{ type: "spring", damping: 20 }}
+              style={{ display: "inline-block" }}
               key={i}
             >
-              {l}
+              {l === " " ? "\u00a0" : l}
             </motion.span>
           ))}
         </motion.span>
-        <span className="relative z-10 mt-2 block text-base text-muted-foreground transition-colors duration-500 group-hover:text-foreground">
+
+        {/* Subheading */}
+        <motion.span
+          variants={{
+            initial: { opacity: 1, x: 0 },
+            whileHover: { opacity: 0.65, x: -16 },
+          }}
+          transition={{ type: "spring", damping: 25 }}
+          style={{
+            display: "block",
+            marginTop: "0.5rem",
+            fontSize: "1rem",
+            color: "#9a9290",
+            letterSpacing: "0.01em",
+            fontFamily: "'Helvetica Neue', Helvetica, Arial, sans-serif",
+          }}
+        >
           {subheading}
-        </span>
+        </motion.span>
       </div>
 
+      {/* Floating card */}
       <motion.div
         style={{
           top,
           left,
-          translateX: "-10%",
+          translateX: "-50%",
           translateY: "-50%",
+          position: "absolute",
+          zIndex: 50,
+          pointerEvents: "none",
         }}
         variants={{
-          initial: { scale: 0, rotate: "-12.5deg" },
-          whileHover: { scale: 1, rotate: "12.5deg" },
+          initial: { scale: 0, rotate: "-12.5deg", opacity: 0 },
+          whileHover: { scale: 1, rotate: "12.5deg", opacity: 1 },
         }}
-        transition={{ type: "spring" }}
-        className="absolute z-0 flex h-24 w-32 items-center justify-center rounded-3xl bg-foreground shadow-lg md:h-48 md:w-64"
+        transition={{ type: "spring", damping: 18, stiffness: 200 }}
       >
-        <Icon className="text-background size-12 md:size-20" />
+        <div
+          style={{
+            width: "9rem",
+            height: "11rem",
+            borderRadius: "1.25rem",
+            background: "#ffffff",
+            border: "1px solid #e8e8e8",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            boxShadow: "0 24px 64px rgba(255,255,255,0.12)",
+          }}
+        >
+          <Icon style={{ fontSize: "3rem", color: "#111" }} />
+        </div>
       </motion.div>
 
-      <div className="overflow-hidden">
+      {/* Arrow */}
+      <div style={{ overflow: "hidden", flexShrink: 0, marginLeft: "1rem" }}>
         <motion.div
           variants={{
-            initial: { x: "100%", opacity: 0 },
+            initial: { x: "110%", opacity: 0 },
             whileHover: { x: "0%", opacity: 1 },
           }}
-          transition={{ type: "spring" }}
-          className="relative z-10 p-4"
+          transition={{ type: "spring", damping: 22 }}
+          style={{ position: "relative", zIndex: 10, padding: "0.5rem" }}
         >
-          <ArrowRight className="size-8 text-foreground md:size-12" />
+          <ArrowUpRight
+            style={{ width: "1.25rem", height: "1.25rem", color: accentColor }}
+          />
         </motion.div>
       </div>
     </motion.a>
@@ -147,23 +233,27 @@ export const INTERACTIVE_LINKS = [
     subheading: "Claude를 외부 도구 및 데이터 소스에 연결하세요",
     icon: TbPlugConnected,
     href: "/claude-code-components/mcp",
+    accentColor: "#22d3ee",
   },
   {
     heading: "Subagents",
     subheading: "복잡한 작업을 전문 에이전트에게 위임하세요",
     icon: FaRobot,
     href: "/claude-code-components/subagents",
+    accentColor: "#f97316",
   },
   {
     heading: "Hooks",
     subheading: "툴 이벤트 발생 시 셸 명령어를 자동으로 실행하세요",
     icon: GiFishingHook,
     href: "/claude-code-components/hooks",
+    accentColor: "#4ade80",
   },
   {
     heading: "Skills",
     subheading: "재사용 가능한 슬래시 명령어로 Claude Code를 확장하세요",
     icon: BsStars,
     href: "/claude-code-components/skills",
+    accentColor: "#a78bfa",
   },
 ];

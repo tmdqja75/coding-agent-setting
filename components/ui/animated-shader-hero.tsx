@@ -400,8 +400,8 @@ const Hero: React.FC<HeroProps> = ({
           </div>
 
           {/* Subtitle */}
-          <div className="max-w-3xl mx-auto animate-fade-in-up animation-delay-600">
-            <p className="text-lg md:text-xl lg:text-2xl text-orange-100/90 font-light leading-relaxed">
+          <div className="max-w-4xl mx-auto animate-fade-in-up animation-delay-600 bg-black/20 backdrop-blur-md rounded-2xl px-8 py-5 border border-white/5">
+            <p className="text-lg md:text-xl lg:text-2xl text-orange-100/90 font-light leading-relaxed whitespace-pre-line">
               {subtitle}
             </p>
           </div>
