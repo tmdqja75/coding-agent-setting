@@ -30,14 +30,15 @@ Keep questions concise and in Korean. Maximum 3 follow-up questions before build
 
 
 async def decide_node(state: AgentState) -> dict:
-    response = await llm.ainvoke(
-        [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
-    )
-
     try:
+        response = await llm.ainvoke(
+            [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
+        )
         parsed = json.loads(response.content)
     except json.JSONDecodeError:
         parsed = {"action": "ask_question", "question": "프로젝트에 대해 더 알려주세요."}
+    except Exception:
+        parsed = {"action": "ask_question", "question": "일시적인 오류가 발생했습니다. 다시 시도해 주세요."}
 
     action = parsed.get("action", "ask_question")
 
@@ -120,12 +121,15 @@ Available plugins: {found_plugins}
 
 Generate subagents for this project, or return [] if none are needed."""
 
-    response = await llm.ainvoke(
-        [SystemMessage(content=GENERATE_SUBAGENTS_PROMPT), HumanMessage(content=user_message)]
-    )
+    try:
+        response = await llm.ainvoke(
+            [SystemMessage(content=GENERATE_SUBAGENTS_PROMPT), HumanMessage(content=user_message)]
+        )
+        raw = response.content.strip()
+    except Exception:
+        return {"generated_agents": []}
 
     try:
-        raw = response.content.strip()
         if raw.startswith("```"):
             raw = raw.split("```", 2)[1]
             if raw.startswith("json"):
@@ -170,13 +174,9 @@ async def build_zip_node(state: AgentState) -> dict:
     for query_results in search_results.values():
         mcp_servers.extend(query_results.get("mcp", [])[:3])
         for skill in query_results.get("skills", [])[:2]:
-            raw_url = skill.get("metadata", {}).get("rawFileUrl") or skill.get("sourceUrl")
-            if raw_url:
-                try:
-                    content = await download_file(raw_url)
-                    skill_files.append((skill["name"], content))
-                except Exception:
-                    pass
+            content = skill.get("content", "")
+            if content:
+                skill_files.append((skill["name"], content))
 
     mcp_config: dict = {"mcpServers": {}}
     for server in mcp_servers:
