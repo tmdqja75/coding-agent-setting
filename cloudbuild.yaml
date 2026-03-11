@@ -27,3 +27,6 @@ steps:
 
 images:
   - asia-northeast3-docker.pkg.dev/claude-code-env-agent/claude-code-agent/api:$COMMIT_SHA
+
+options:
+  logging: CLOUD_LOGGING_ONLY
