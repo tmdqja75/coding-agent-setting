@@ -6,10 +6,9 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, START, END
 import os
-from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 from langgraph.types import interrupt
-from state import AgentState
-from tools import (
+from agent.state import AgentState
+from agent.tools import (
     search_mcp, search_skills, search_plugins,
     fetch_subagent_content, get_catalog_index_text,
 )
@@ -318,7 +317,7 @@ def route(state: AgentState) -> str:
     return END
 
 
-def build_graph():
+def build_graph(checkpointer):
     builder = StateGraph(AgentState)
     builder.add_node("decide", decide_node)
     builder.add_node("search", search_node)
@@ -331,6 +330,4 @@ def build_graph():
     builder.add_edge("generate_subagents", "build_zip")
     builder.add_edge("build_zip", END)
 
-    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
-    checkpointer = AsyncRedisSaver.from_conn_string(redis_url)
     return builder.compile(checkpointer=checkpointer)

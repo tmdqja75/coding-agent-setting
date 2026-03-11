@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,6 +7,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
+from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 import redis.asyncio as aioredis
 
 load_dotenv()
@@ -25,13 +27,25 @@ else:
 
 from agent.agent import build_graph
 
-graph = build_graph()
-
 _redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
-redis_client = aioredis.from_url(_redis_url, decode_responses=False)
 ZIP_TTL = 3600  # 1 hour
 
-app = FastAPI()
+graph = None
+redis_client = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global graph, redis_client
+    redis_client = aioredis.from_url(_redis_url, decode_responses=False)
+    async with AsyncRedisSaver.from_conn_string(_redis_url) as checkpointer:
+        await checkpointer.asetup()
+        graph = build_graph(checkpointer)
+        yield
+    await redis_client.aclose()
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
