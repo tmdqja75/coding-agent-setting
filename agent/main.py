@@ -5,6 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
+from langgraph.types import Command
+import redis.asyncio as aioredis
 
 load_dotenv()
 
@@ -21,10 +23,13 @@ elif _langsmith_key:
 else:
     _obs_callback = None
 
-from agent import build_graph
+from agent.agent import build_graph
 
 graph = build_graph()
-zip_store: dict[str, bytes] = {}
+
+_redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+redis_client = aioredis.from_url(_redis_url, decode_responses=False)
+ZIP_TTL = 3600  # 1 hour
 
 app = FastAPI()
 
@@ -54,10 +59,10 @@ async def chat(req: ChatRequest):
 
     existing = await graph.aget_state(config)
     if existing.values:
-        # Continuation: only add the new message; preserve all checkpointed state
-        input_state = {"messages": [HumanMessage(content=req.message)]}
+        # Continuation: graph is paused at an interrupt — resume with user's answer
+        input_state = Command(resume=req.message)
     else:
-        # New thread: initialize full state
+        # New thread: initialize full state with the first user message
         input_state = {
             "messages": [HumanMessage(content=req.message)],
             "context": {},
@@ -72,19 +77,20 @@ async def chat(req: ChatRequest):
 
     zip_bytes = state.get("zip_bytes")
     if zip_bytes:
-        zip_store[req.thread_id] = zip_bytes
+        await redis_client.setex(f"zip:{req.thread_id}", ZIP_TTL, zip_bytes)
         return {"type": "ready", "text": "설정 파일을 생성했습니다."}
 
-    question = state.get("next_question")
-    if question:
-        return {"type": "question", "text": question}
+    # Graph paused at an interrupt — surface the question to the frontend
+    pending = state.get("__interrupt__", [])
+    if pending:
+        return {"type": "question", "text": pending[0].value}
 
     return {"type": "ready", "text": "설정을 빌드합니다..."}
 
 
 @app.get("/download/{thread_id}")
-def download(thread_id: str):
-    zip_bytes = zip_store.get(thread_id)
+async def download(thread_id: str):
+    zip_bytes = await redis_client.get(f"zip:{thread_id}")
     if not zip_bytes:
         raise HTTPException(status_code=404, detail="Zip not found. Try chatting first.")
     return Response(

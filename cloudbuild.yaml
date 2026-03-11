@@ -1,0 +1,29 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - build
+      - -t
+      - asia-northeast3-docker.pkg.dev/claude-code-env-agent/claude-code-agent/api:$COMMIT_SHA
+      - .
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - push
+      - asia-northeast3-docker.pkg.dev/claude-code-env-agent/claude-code-agent/api:$COMMIT_SHA
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - claude-code-agent
+      - --image=asia-northeast3-docker.pkg.dev/claude-code-env-agent/claude-code-agent/api:$COMMIT_SHA
+      - --region=asia-northeast3
+      - --platform=managed
+      - --allow-unauthenticated
+      - --memory=512Mi
+      - --timeout=300
+      - --set-secrets=ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest,REDIS_URL=REDIS_URL:latest,SKILLSMP_API_KEY=SKILLSMP_API_KEY:latest,LANGSMITH_API_KEY=LANGSMITH_API_KEY:latest,LANGCHAIN_PROJECT=LANGCHAIN_PROJECT:latest,LANGCHAIN_TRACING_V2=LANGCHAIN_TRACING_V2:latest
+
+images:
+  - asia-northeast3-docker.pkg.dev/claude-code-env-agent/claude-code-agent/api:$COMMIT_SHA

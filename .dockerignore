@@ -1,0 +1,14 @@
+.git
+.next
+node_modules
+app/
+components/
+public/
+*.md
+*.json
+!pyproject.toml
+agent/.env
+agent/tests/
+__pycache__
+*.pyc
+.DS_Store

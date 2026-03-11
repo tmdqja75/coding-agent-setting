@@ -3,9 +3,11 @@ import io
 import zipfile
 import asyncio
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import InMemorySaver
+import os
+from langgraph.checkpoint.redis.aio import AsyncRedisSaver
+from langgraph.types import interrupt
 from state import AgentState
 from tools import (
     search_mcp, search_skills, search_plugins,
@@ -33,31 +35,55 @@ Keep questions concise and in Korean. Maximum 3 follow-up questions before build
 
 
 async def decide_node(state: AgentState) -> dict:
-    try:
-        response = await llm.ainvoke(
-            [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
-        )
-        parsed = json.loads(response.content)
-    except json.JSONDecodeError:
-        parsed = {"action": "ask_question", "question": "프로젝트에 대해 더 알려주세요."}
-    except Exception:
-        parsed = {"action": "ask_question", "question": "일시적인 오류가 발생했습니다. 다시 시도해 주세요."}
+    # Build a working message list starting from checkpointed state.
+    # new_messages accumulates Q+A pairs added during this node execution
+    # so they can be committed to state when the node finally returns.
+    working_messages = list(state["messages"])
+    new_messages: list = []
 
-    action = parsed.get("action", "ask_question")
+    while True:
+        try:
+            response = await llm.ainvoke(
+                [SystemMessage(content=SYSTEM_PROMPT)] + working_messages
+            )
+            parsed = json.loads(response.content)
+        except json.JSONDecodeError:
+            parsed = {"action": "ask_question", "question": "프로젝트에 대해 더 알려주세요."}
+        except Exception:
+            parsed = {"action": "ask_question", "question": "일시적인 오류가 발생했습니다. 다시 시도해 주세요."}
 
-    if action == "ask_question":
-        return {"next_question": parsed.get("question"), "phase": "clarify"}
-    elif action == "search_apis":
-        return {
-            "phase": "search",
-            "pending_queries": parsed.get("queries", []),
-            "context": parsed.get("project_context", {}),
-            "next_question": None,
-        }
-    elif action == "build_zip":
-        return {"phase": "build", "next_question": None}
+        action = parsed.get("action", "ask_question")
 
-    return {"next_question": parsed.get("question", "더 알려주세요."), "phase": "clarify"}
+        if action == "search_apis":
+            return {
+                "messages": new_messages,
+                "phase": "search",
+                "pending_queries": parsed.get("queries", []),
+                "context": parsed.get("project_context", {}),
+                "next_question": None,
+            }
+
+        if action == "build_zip":
+            return {
+                "messages": new_messages,
+                "phase": "build",
+                "next_question": None,
+            }
+
+        # ask_question (or unknown action): interrupt and wait for user's answer.
+        # On resume, LangGraph replays this node from the top; interrupt() returns
+        # the recorded resume values in order, so the loop re-accumulates context
+        # correctly before pausing at the new (un-resumed) interrupt.
+        question = parsed.get("question") or "더 알려주세요."
+        ai_msg = AIMessage(content=question)
+        working_messages.append(ai_msg)
+        new_messages.append(ai_msg)
+
+        user_answer = interrupt(question)
+
+        human_msg = HumanMessage(content=user_answer)
+        working_messages.append(human_msg)
+        new_messages.append(human_msg)
 
 
 async def search_node(state: AgentState) -> dict:
@@ -305,4 +331,6 @@ def build_graph():
     builder.add_edge("generate_subagents", "build_zip")
     builder.add_edge("build_zip", END)
 
-    return builder.compile(checkpointer=InMemorySaver())
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+    checkpointer = AsyncRedisSaver.from_conn_string(redis_url)
+    return builder.compile(checkpointer=checkpointer)
