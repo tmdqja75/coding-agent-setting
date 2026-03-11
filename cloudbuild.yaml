@@ -23,7 +23,7 @@ steps:
       - --allow-unauthenticated
       - --memory=512Mi
       - --timeout=300
-      - --set-secrets=ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest,REDIS_URL=REDIS_URL:latest,SKILLSMP_API_KEY=SKILLSMP_API_KEY:latest,LANGSMITH_API_KEY=LANGSMITH_API_KEY:latest,LANGCHAIN_PROJECT=LANGCHAIN_PROJECT:latest,LANGCHAIN_TRACING_V2=LANGCHAIN_TRACING_V2:latest
+      - --set-secrets=ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest,REDIS_URL=REDIS_URL:latest,SKILLSMP_API_KEY=SKILLSMP_API_KEY:latest,LANGSMITH_API_KEY=LANGSMITH_API_KEY:latest,LANGCHAIN_PROJECT=LANGCHAIN_PROJECT:latest,LANGCHAIN_TRACING_V2=LANGCHAIN_TRACING_V2:latest,FRONTEND_URL=FRONTEND_URL:latest
 
 images:
   - asia-northeast3-docker.pkg.dev/claude-code-env-agent/claude-code-agent/api:$COMMIT_SHA
