@@ -3,11 +3,16 @@ import io
 import zipfile
 import asyncio
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import InMemorySaver
+import os
+from langgraph.checkpoint.redis.aio import AsyncRedisSaver
+from langgraph.types import interrupt
 from state import AgentState
-from tools import search_mcp, search_skills, search_plugins, download_file
+from tools import (
+    search_mcp, search_skills, search_plugins,
+    fetch_subagent_content, get_catalog_index_text,
+)
 
 llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0)
 
@@ -30,30 +35,55 @@ Keep questions concise and in Korean. Maximum 3 follow-up questions before build
 
 
 async def decide_node(state: AgentState) -> dict:
-    response = await llm.ainvoke(
-        [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
-    )
+    # Build a working message list starting from checkpointed state.
+    # new_messages accumulates Q+A pairs added during this node execution
+    # so they can be committed to state when the node finally returns.
+    working_messages = list(state["messages"])
+    new_messages: list = []
 
-    try:
-        parsed = json.loads(response.content)
-    except json.JSONDecodeError:
-        parsed = {"action": "ask_question", "question": "프로젝트에 대해 더 알려주세요."}
+    while True:
+        try:
+            response = await llm.ainvoke(
+                [SystemMessage(content=SYSTEM_PROMPT)] + working_messages
+            )
+            parsed = json.loads(response.content)
+        except json.JSONDecodeError:
+            parsed = {"action": "ask_question", "question": "프로젝트에 대해 더 알려주세요."}
+        except Exception:
+            parsed = {"action": "ask_question", "question": "일시적인 오류가 발생했습니다. 다시 시도해 주세요."}
 
-    action = parsed.get("action", "ask_question")
+        action = parsed.get("action", "ask_question")
 
-    if action == "ask_question":
-        return {"next_question": parsed.get("question"), "phase": "clarify"}
-    elif action == "search_apis":
-        return {
-            "phase": "search",
-            "pending_queries": parsed.get("queries", []),
-            "context": parsed.get("project_context", {}),
-            "next_question": None,
-        }
-    elif action == "build_zip":
-        return {"phase": "build", "next_question": None}
+        if action == "search_apis":
+            return {
+                "messages": new_messages,
+                "phase": "search",
+                "pending_queries": parsed.get("queries", []),
+                "context": parsed.get("project_context", {}),
+                "next_question": None,
+            }
 
-    return {"next_question": parsed.get("question", "더 알려주세요."), "phase": "clarify"}
+        if action == "build_zip":
+            return {
+                "messages": new_messages,
+                "phase": "build",
+                "next_question": None,
+            }
+
+        # ask_question (or unknown action): interrupt and wait for user's answer.
+        # On resume, LangGraph replays this node from the top; interrupt() returns
+        # the recorded resume values in order, so the loop re-accumulates context
+        # correctly before pausing at the new (un-resumed) interrupt.
+        question = parsed.get("question") or "더 알려주세요."
+        ai_msg = AIMessage(content=question)
+        working_messages.append(ai_msg)
+        new_messages.append(ai_msg)
+
+        user_answer = interrupt(question)
+
+        human_msg = HumanMessage(content=user_answer)
+        working_messages.append(human_msg)
+        new_messages.append(human_msg)
 
 
 async def search_node(state: AgentState) -> dict:
@@ -74,30 +104,58 @@ async def search_node(state: AgentState) -> dict:
     return {"search_results": results}
 
 
-GENERATE_SUBAGENTS_PROMPT = """You are a Claude Code configuration expert. Based on the user's
-project context and available tools found by search, decide whether custom subagents would be
-useful and generate them if so.
+SELECT_SUBAGENTS_PROMPT = """You are a Claude Code configuration expert. You have access to a curated catalog of 120+ community subagents from the awesome-claude-code-subagents repository.
 
-Output a JSON array. If no subagents are needed, return an empty array: []
+Based on the user's project context, select the most relevant subagents from the catalog below.
 
-If subagents are useful, return 2-4 definitions:
+## Catalog Index
+{catalog_index}
+
+## Instructions
+- Select 0-4 subagents that best match the project's tech stack and workflows
+- Only select subagents that would genuinely help this specific project
+- If the project is very simple, select fewer or none
+- Return a JSON array of selected entries: [{{"name": "...", "category": "..."}}]
+- If no catalog subagents are relevant, return: []
+"""
+
+CUSTOM_SUBAGENTS_PROMPT = """You are a Claude Code configuration expert. Some subagents have already been selected from a curated catalog. Now decide if additional CUSTOM subagents are needed for workflows not covered by the catalog selections.
+
+Already selected from catalog: {selected_names}
+
+Output a JSON array. If no additional custom subagents are needed, return: []
+
+If custom subagents would fill genuine gaps, return 1-2 definitions:
 [
-  {
+  {{
     "name": "kebab-case-name",
     "description": "Specific trigger description for when Claude should delegate here",
     "tools": ["Read", "Grep", "Glob"],
     "model": "haiku",
     "system_prompt": "Focused system prompt for this agent..."
-  }
+  }}
 ]
 
 Rules:
-- Only generate subagents that solve real, recurring tasks for the given project
+- Only generate custom subagents for workflows NOT covered by the already-selected catalog subagents
 - Use the minimum tools needed (principle of least privilege)
 - model: "haiku" for fast/cheap lookup tasks, "sonnet" for reasoning tasks, "opus" for complex work
-- If the project is simple or has no clear recurring workflows, return []
 - Available tools: Read, Write, Edit, Bash, Glob, Grep, Agent
-- Write the "system_prompt" field in Korean"""
+- Write the "system_prompt" field in Korean
+- system_prompt should be detailed and tailored to the user's project
+"""
+
+
+def _parse_json_response(raw: str) -> list:
+    """Parse a JSON array from an LLM response, handling markdown code fences."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```", 2)[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+        raw = raw.rstrip("`").strip()
+    result = json.loads(raw)
+    return result if isinstance(result, list) else []
 
 
 async def generate_subagents_node(state: AgentState) -> dict:
@@ -107,38 +165,75 @@ async def generate_subagents_node(state: AgentState) -> dict:
     found_mcps = []
     found_skills = []
     found_plugins = []
-    for q, r in search_results.items():
+    for _, r in search_results.items():
         found_mcps.extend([s.get("name") for s in r.get("mcp", [])[:3]])
         found_skills.extend([s.get("name") for s in r.get("skills", [])[:2]])
         found_plugins.extend([p.get("name") for p in r.get("plugins", [])[:1]])
 
-    user_message = f"""Project context: {json.dumps(context)}
+    # ── Phase A: Select from catalog ──
+    catalog_index = get_catalog_index_text()
+    select_prompt = SELECT_SUBAGENTS_PROMPT.format(catalog_index=catalog_index)
+
+    select_user_msg = f"""Project context: {json.dumps(context)}
 
 Available MCP servers: {found_mcps}
 Available skills: {found_skills}
 Available plugins: {found_plugins}
 
-Generate subagents for this project, or return [] if none are needed."""
+Select the most relevant subagents from the catalog for this project."""
 
-    response = await llm.ainvoke(
-        [SystemMessage(content=GENERATE_SUBAGENTS_PROMPT), HumanMessage(content=user_message)]
+    catalog_selections: list[dict] = []
+    try:
+        response = await llm.ainvoke(
+            [SystemMessage(content=select_prompt), HumanMessage(content=select_user_msg)]
+        )
+        catalog_selections = _parse_json_response(response.content)
+    except Exception:
+        catalog_selections = []
+
+    # Fetch full .md content for each selected catalog subagent
+    agent_files: list[tuple[str, str]] = []
+    selected_names: list[str] = []
+
+    async def fetch_catalog_entry(entry: dict) -> tuple[str, str] | None:
+        name = entry.get("name", "").strip()
+        category = entry.get("category", "").strip()
+        if not name or not category:
+            return None
+        content = await fetch_subagent_content(name, category)
+        if content:
+            return (name, content)
+        return None
+
+    fetch_tasks = [fetch_catalog_entry(e) for e in catalog_selections[:4]]
+    fetch_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+
+    for result in fetch_results:
+        if isinstance(result, tuple):
+            agent_files.append(result)
+            selected_names.append(result[0])
+
+    # ── Phase B: Generate custom subagents for gaps ──
+    custom_prompt = CUSTOM_SUBAGENTS_PROMPT.format(
+        selected_names=", ".join(selected_names) if selected_names else "(none)"
     )
 
-    try:
-        raw = response.content.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```", 2)[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.rstrip("`").strip()
-        definitions = json.loads(raw)
-        if not isinstance(definitions, list):
-            definitions = []
-    except (json.JSONDecodeError, ValueError):
-        definitions = []
+    custom_user_msg = f"""Project context: {json.dumps(context)}
 
-    agent_files: list[tuple[str, str]] = []
-    for defn in definitions:
+Available MCP servers: {found_mcps}
+Available skills: {found_skills}
+
+Generate custom subagents only for gaps not covered by the catalog selections, or return [] if no gaps exist."""
+
+    try:
+        response = await llm.ainvoke(
+            [SystemMessage(content=custom_prompt), HumanMessage(content=custom_user_msg)]
+        )
+        custom_definitions = _parse_json_response(response.content)
+    except Exception:
+        custom_definitions = []
+
+    for defn in custom_definitions[:2]:
         name = defn.get("name", "").strip()
         if not name:
             continue
@@ -170,13 +265,9 @@ async def build_zip_node(state: AgentState) -> dict:
     for query_results in search_results.values():
         mcp_servers.extend(query_results.get("mcp", [])[:3])
         for skill in query_results.get("skills", [])[:2]:
-            raw_url = skill.get("metadata", {}).get("rawFileUrl") or skill.get("sourceUrl")
-            if raw_url:
-                try:
-                    content = await download_file(raw_url)
-                    skill_files.append((skill["name"], content))
-                except Exception:
-                    pass
+            content = skill.get("content", "")
+            if content:
+                skill_files.append((skill["name"], content))
 
     mcp_config: dict = {"mcpServers": {}}
     for server in mcp_servers:
@@ -240,4 +331,6 @@ def build_graph():
     builder.add_edge("generate_subagents", "build_zip")
     builder.add_edge("build_zip", END)
 
-    return builder.compile(checkpointer=InMemorySaver())
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+    checkpointer = AsyncRedisSaver.from_conn_string(redis_url)
+    return builder.compile(checkpointer=checkpointer)

@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Add your description here"
 requires-python = ">=3.12.2"
 dependencies = [
-    "fastapi==0.115.6",
+    "fastapi[standard]==0.115.6",
     "httpx[test]==0.28.1",
     "langchain-anthropic>=0.3.3",
     "langfuse>=3.14.5",
@@ -12,6 +12,8 @@ dependencies = [
     "langsmith>=0.7.9",
     "python-dotenv==1.0.1",
     "uvicorn[standard]==0.32.1",
+    "langgraph-checkpoint-redis>=0.0.6",
+    "redis>=5.2.0",
 ]
 
 [dependency-groups]
