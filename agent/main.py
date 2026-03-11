@@ -38,7 +38,14 @@ redis_client = None
 async def lifespan(app: FastAPI):
     global graph, redis_client
     redis_client = aioredis.from_url(_redis_url, decode_responses=False)
-    async with AsyncRedisSaver.from_conn_string(_redis_url) as checkpointer:
+    async with AsyncRedisSaver.from_conn_string(
+        _redis_url,
+        connection_args={
+            "health_check_interval": 30,
+            "socket_keepalive": True,
+            "retry_on_timeout": True,
+        },
+    ) as checkpointer:
         await checkpointer.asetup()
         graph = build_graph(checkpointer)
         yield
