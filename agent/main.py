@@ -1,3 +1,4 @@
+import base64
 import os
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
@@ -100,8 +101,9 @@ async def chat(req: ChatRequest):
 
     state = await graph.ainvoke(input_state, config)
 
-    zip_bytes = state.get("zip_bytes")
-    if zip_bytes:
+    zip_b64 = state.get("zip_bytes")
+    if zip_b64:
+        zip_bytes = base64.b64decode(zip_b64)
         await redis_client.setex(f"zip:{req.thread_id}", ZIP_TTL, zip_bytes)
         return {"type": "ready", "text": "설정 파일을 생성했습니다."}
 

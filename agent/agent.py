@@ -1,3 +1,4 @@
+import base64
 import json
 import io
 import zipfile
@@ -305,7 +306,7 @@ async def build_zip_node(state: AgentState) -> dict:
         for name, content in agent_files:
             zf.writestr(f".claude/agents/{name.replace('/', '_')}.md", content)
 
-    return {"zip_bytes": buf.getvalue()}
+    return {"zip_bytes": base64.b64encode(buf.getvalue()).decode("ascii")}
 
 
 def route(state: AgentState) -> str:

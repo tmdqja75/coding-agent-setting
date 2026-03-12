@@ -10,5 +10,5 @@ class AgentState(TypedDict):
     pending_queries: list[str]             # queries waiting to be executed
     phase: str                             # "clarify" | "search" | "build"
     next_question: str | None              # question to return to frontend
-    zip_bytes: bytes | None                # generated zip, stored for /download
+    zip_bytes: str | None                  # generated zip as base64 string, stored for /download
     generated_agents: list[tuple[str, str]]  # (filename, markdown_content) pairs
