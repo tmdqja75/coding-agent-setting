@@ -494,3 +494,74 @@ def test_graph_builds_with_all_new_nodes():
     assert "build_zip" in node_names
     assert "decide" in node_names
     assert "search" in node_names
+
+
+@pytest.mark.asyncio
+async def test_full_pipeline_video_domain():
+    """Smoke test: full pipeline from video domain conversation to zip with settings.json."""
+    from agent.agent import build_graph
+    from langgraph.checkpoint.memory import MemorySaver
+
+    graph = build_graph(MemorySaver())
+    config = {"configurable": {"thread_id": "smoke-video-1"}}
+
+    def make_mock_response(content):
+        m = MagicMock()
+        m.content = content
+        return m
+
+    responses = [
+        # decide_node: emit search after context gathered
+        make_mock_response(json.dumps({
+            "action": "search_apis",
+            "queries": ["remotion video", "react animation", "ffmpeg video", "video export"],
+            "project_context": {
+                "type": "video",
+                "stack": ["Remotion", "React"],
+                "workflows": ["render video"],
+                "domain": "video",
+                "pain_points": ["slow renders"],
+                "daily_workflows": ["render video", "export MP4"],
+            }
+        })),
+        # rerank_results: keep mcp-ffmpeg
+        make_mock_response(json.dumps(["mcp-ffmpeg"])),
+        # generate_subagents catalog selection: empty
+        make_mock_response("[]"),
+        # generate_subagents custom: empty
+        make_mock_response("[]"),
+        # generate_settings
+        make_mock_response(json.dumps({
+            "permissions": {"allow": ["Bash(npx remotion*)", "Bash(ffmpeg*)"]},
+            "hooks": {},
+            "model": "claude-sonnet-4-6"
+        })),
+        # generate_claude_md
+        make_mock_response("# Video Project\n\n## Project Overview\nRemotion video renderer.\n\n## Key Commands\n- `npm run render`\n"),
+    ]
+
+    response_iter = iter(responses)
+
+    async def mock_ainvoke(messages, **kwargs):
+        return next(response_iter)
+
+    with patch.object(ChatAnthropic, "ainvoke", new_callable=AsyncMock, side_effect=mock_ainvoke):
+        with patch("agent.agent.search_mcp", new_callable=AsyncMock, return_value=[{"name": "mcp-ffmpeg", "description": "ffmpeg", "packages": [{"name": "@mcp/ffmpeg"}]}]):
+            with patch("agent.agent.search_skills", new_callable=AsyncMock, return_value=[]):
+                with patch("agent.agent.search_plugins", new_callable=AsyncMock, return_value=[]):
+                    state = await graph.ainvoke(
+                        {**INITIAL_STATE, "messages": [HumanMessage(content="Remotion 영상 프로젝트입니다")]},
+                        config,
+                    )
+
+    assert state["zip_bytes"] is not None
+    buf = io.BytesIO(base64.b64decode(state["zip_bytes"]))
+    with zipfile.ZipFile(buf) as zf:
+        names = zf.namelist()
+        assert ".mcp.json" in names
+        assert "CLAUDE.md" in names
+        assert ".claude/settings.json" in names
+        claude_md = zf.read("CLAUDE.md").decode()
+        assert "Video Project" in claude_md
+        settings = json.loads(zf.read(".claude/settings.json"))
+        assert "Bash(npx remotion*)" in settings["permissions"]["allow"]
