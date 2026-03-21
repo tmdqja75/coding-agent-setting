@@ -56,7 +56,13 @@ async def decide_node(state: AgentState) -> dict:
             response = await llm.ainvoke(
                 [SystemMessage(content=SYSTEM_PROMPT)] + working_messages
             )
-            parsed = json.loads(response.content)
+            raw = response.content.strip()
+            if raw.startswith("```"):
+                raw = raw.split("```", 2)[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+                raw = raw.rstrip("`").strip()
+            parsed = json.loads(raw)
         except json.JSONDecodeError:
             parsed = {"action": "ask_question", "question": "프로젝트에 대해 더 알려주세요."}
         except Exception:
