@@ -488,12 +488,16 @@ def build_graph(checkpointer):
     builder.add_node("decide", decide_node)
     builder.add_node("search", search_node)
     builder.add_node("generate_subagents", generate_subagents_node)
+    builder.add_node("generate_settings", generate_settings_node)
+    builder.add_node("generate_claude_md", generate_claude_md_node)
     builder.add_node("build_zip", build_zip_node)
 
     builder.add_edge(START, "decide")
     builder.add_conditional_edges("decide", route, ["search", END])
     builder.add_edge("search", "generate_subagents")
-    builder.add_edge("generate_subagents", "build_zip")
+    builder.add_edge("generate_subagents", "generate_settings")
+    builder.add_edge("generate_settings", "generate_claude_md")
+    builder.add_edge("generate_claude_md", "build_zip")
     builder.add_edge("build_zip", END)
 
     return builder.compile(checkpointer=checkpointer)

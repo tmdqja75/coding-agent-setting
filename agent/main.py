@@ -97,6 +97,9 @@ async def chat(req: ChatRequest):
             "phase": "clarify",
             "next_question": None,
             "zip_bytes": None,
+            "generated_agents": [],
+            "settings_json": None,
+            "claude_md": None,
         }
 
     state = await graph.ainvoke(input_state, config)

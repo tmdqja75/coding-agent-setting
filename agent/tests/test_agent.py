@@ -33,13 +33,17 @@ def test_agent_state_has_new_fields():
 
 
 def test_graph_builds_without_error():
-    graph = build_graph()
+    from agent.agent import build_graph
+    from langgraph.checkpoint.memory import MemorySaver
+    graph = build_graph(MemorySaver())
     assert graph is not None
 
 
 @pytest.mark.asyncio
 async def test_graph_returns_question_on_first_message():
-    graph = build_graph()
+    from agent.agent import build_graph
+    from langgraph.checkpoint.memory import MemorySaver
+    graph = build_graph(MemorySaver())
     config = {"configurable": {"thread_id": "test-thread-1"}}
 
     mock_ai_response = MagicMock()
@@ -474,3 +478,19 @@ async def test_generate_claude_md_node_fallback_on_error():
         result = await generate_claude_md_node(state)
 
     assert result["claude_md"] is None  # None signals build_zip to use fallback
+
+
+from langgraph.checkpoint.memory import MemorySaver
+
+def test_graph_builds_with_all_new_nodes():
+    from agent.agent import build_graph
+    checkpointer = MemorySaver()
+    graph = build_graph(checkpointer)
+    assert graph is not None
+    node_names = list(graph.nodes.keys())
+    assert "generate_settings" in node_names
+    assert "generate_claude_md" in node_names
+    assert "generate_subagents" in node_names
+    assert "build_zip" in node_names
+    assert "decide" in node_names
+    assert "search" in node_names
