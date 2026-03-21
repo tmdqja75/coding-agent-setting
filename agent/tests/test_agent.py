@@ -55,7 +55,7 @@ async def test_graph_returns_question_on_first_message():
             config,
         )
 
-    assert state["next_question"] is not None or state["phase"] in ("clarify", "search", "build")
+    assert state["next_question"] is not None or state["phase"] in ("clarify", "search")
 
 
 @pytest.mark.asyncio

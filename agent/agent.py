@@ -6,7 +6,6 @@ import asyncio
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, START, END
-import os
 from langgraph.types import interrupt
 from agent.state import AgentState
 from agent.tools import (
@@ -61,7 +60,6 @@ async def decide_node(state: AgentState) -> dict:
         except json.JSONDecodeError:
             parsed = {"action": "ask_question", "question": "프로젝트에 대해 더 알려주세요."}
         except Exception:
-            
             parsed = {"action": "ask_question", "question": "일시적인 오류가 발생했습니다. 다시 시도해 주세요."}
 
         action = parsed.get("action", "ask_question")
@@ -236,8 +234,8 @@ async def generate_claude_md_node(state: AgentState) -> dict:
     mcp_names = []
     skill_names = []
     for r in search_results.values():
-        mcp_names.extend(s.get("name") for s in r.get("mcp", [])[:3])
-        skill_names.extend(s.get("name") for s in r.get("skills", [])[:2])
+        mcp_names.extend(s.get("name") for s in r.get("mcp", [])[:3] if s.get("name"))
+        skill_names.extend(s.get("name") for s in r.get("skills", [])[:2] if s.get("name"))
     agent_names = [name for name, _ in agent_files]
 
     prompt = GENERATE_CLAUDE_MD_PROMPT.format(
