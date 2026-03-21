@@ -38,7 +38,7 @@ Domain options: **coding / marketing / video production / research / mixed / oth
 If the user selects **others**, the agent asks a free-form follow-up:
 > "어떤 작업을 하고 계신지 설명해 주세요."
 
-The free-form response is used to infer relevant tools and skills the same way explicit domains are used.
+If the free-form response yields no actionable signal (e.g. one-word answer, out-of-scope), the agent proceeds with an empty permissions list, no hooks, and the default model (`claude-sonnet-4-6`) as safe fallbacks.
 
 ### Domain-Specific Follow-up Questions
 
@@ -51,7 +51,7 @@ After domain is detected, the agent asks 1-2 domain-specific questions:
 | video production | Framework (Remotion/FFmpeg/other) + output format and asset pipeline |
 | research | Data sources and output format + collaboration tools |
 | mixed | Brief description of each area covered |
-| others | Inferred from free-form description |
+| others | Inferred from free-form description; safe defaults applied if no signal |
 
 After domain-specific questions, the agent always asks one pain-points question:
 > "가장 시간이 많이 걸리거나 불편한 작업은 무엇인가요?"
@@ -70,6 +70,13 @@ Maximum questions: **4** (up from 3) — domain (1) + domain-specific (1-2) + pa
 "daily_workflows": list[str]
 ```
 
+Two new top-level fields are added to `AgentState` to carry upstream node outputs into `build_zip_node`:
+
+```python
+settings_json: str | None    # JSON string for .claude/settings.json
+claude_md: str | None        # Markdown string for CLAUDE.md
+```
+
 ---
 
 ## Section 2: New Graph Nodes & Updated Flow
@@ -77,21 +84,44 @@ Maximum questions: **4** (up from 3) — domain (1) + domain-specific (1-2) + pa
 ### New Nodes
 
 **`generate_settings_node`**
-Dedicated LLM call that produces `.claude/settings.json` with:
-- `permissions.allow` list based on domain
-- 1-2 lifecycle hooks appropriate to the domain
-- Model recommendation based on task complexity
+
+- **Input:** `state["context"]` (including `domain`, `pain_points`, `daily_workflows`)
+- **Output:** `{"settings_json": "<json string>"}` stored in `AgentState.settings_json`
+- Dedicated LLM call producing `.claude/settings.json` with a `permissions.allow` list, 1-2 lifecycle hooks, and a model recommendation — all driven by the domain. Falls back to safe defaults (empty allow list, no hooks, `claude-sonnet-4-6`) if domain yields no signal.
 
 **`generate_claude_md_node`**
-Dedicated LLM call that produces a rich, project-specific `CLAUDE.md` using `context`, `pain_points`, and `daily_workflows`.
+
+- **Input:** `state["context"]`, `state["search_results"]` (for MCP/skill names), `state["generated_agents"]`
+- **Output:** `{"claude_md": "<markdown string>"}` stored in `AgentState.claude_md`
+- Dedicated LLM call producing a rich, project-specific `CLAUDE.md` using context, pain_points, and daily_workflows.
 
 ### Updated Graph Flow
+
+All new nodes use **fixed (unconditional) edges**. The `action == "build_zip"` branch in `decide_node` is **removed** — there is no longer a direct shortcut from `decide` to `build_zip`. Every conversation must flow through the full pipeline. Consequently, `route()` no longer needs the `"build"` / `"build_zip"` case; it only routes to `"search"` or `END`. `build_graph()` is updated to remove `"build_zip"` from the conditional edge targets list.
 
 ```
 START → decide → search → generate_subagents → generate_settings → generate_claude_md → build_zip → END
 ```
 
-`build_zip_node` is simplified: it only packages artifacts produced by upstream nodes, with no generation logic of its own.
+Fixed edges added:
+- `search → generate_subagents` (already exists)
+- `generate_subagents → generate_settings` (new)
+- `generate_settings → generate_claude_md` (new)
+- `generate_claude_md → build_zip` (replaces `generate_subagents → build_zip`)
+
+Removed:
+- The `phase = "build"` / `action == "build_zip"` path in `decide_node`
+- The `"build_zip"` conditional edge target in `build_graph()`
+
+### `build_zip_node` simplification
+
+`build_zip_node` reads `CLAUDE.md` content from `state["claude_md"]` and `settings.json` content from `state["settings_json"]`. It no longer generates either artifact inline. The old inline `CLAUDE.md` generation (lines 283-303 in `agent.py`) is removed.
+
+**Fallback policy:** if either field is `None` (e.g. upstream node raised an exception), `build_zip_node` uses safe defaults:
+- `claude_md` is `None` → write a minimal `CLAUDE.md` with only the heading `# Claude Code Setup`
+- `settings_json` is `None` → write `{}` as the settings file content
+
+Both `settings_json` and `claude_md` must be initialized to `None` in the initial state dict passed by `main.py`'s `/chat` endpoint (alongside `zip_bytes: None`).
 
 ### Domain-to-Permissions Mapping
 
@@ -101,7 +131,8 @@ START → decide → search → generate_subagents → generate_settings → gen
 | video | `Bash(npx remotion*)`, `Bash(ffmpeg*)`, `Bash(npm*)` |
 | marketing | `WebFetch(*)`, `Bash(curl*)` |
 | research | `WebFetch(*)`, `Bash(python*)` |
-| others | Inferred from free-form description |
+| mixed | Union of relevant domain permissions based on described areas |
+| others | Inferred from free-form description; fallback: empty list |
 
 ### Domain-to-Hooks Mapping
 
@@ -109,15 +140,19 @@ START → decide → search → generate_subagents → generate_settings → gen
 |---|---|
 | coding | `PostToolUse` → run linter after file edits |
 | video | `PostToolUse` → validate render config after edits |
-| others | Inferred from free-form description |
+| marketing / research | No hooks |
+| mixed | Hooks from the most relevant sub-domain present |
+| others | Inferred from free-form description; fallback: no hooks |
 
 ### Model Recommendation
+
+Model IDs are illustrative — confirm against Anthropic API before use:
 
 | Domain | Recommended model |
 |---|---|
 | research / complex coding | `claude-opus-4-6` |
 | coding / video | `claude-sonnet-4-6` |
-| marketing / simple lookups | `claude-haiku-4-5` |
+| marketing / simple lookups | `claude-haiku-4-5-20251001` |
 
 ---
 
@@ -140,9 +175,17 @@ instead of: `["video", "react"]`
 
 ### Fix 2: LLM Re-ranking Pass
 
-After all search results are retrieved, a single lightweight LLM call scores each result (MCP server or skill) against the full project context and drops low-relevance entries before they reach downstream nodes.
+After all search results are retrieved, a dedicated `rerank_results()` function in `agent.py` (not `tools.py`) makes a single LLM call to score each result against the full project context.
+
+- **Scoring schema:** binary keep/drop per result (LLM returns a JSON array of names to keep)
+- **Threshold:** any result not in the keep list is dropped
+- **Output:** filtered `search_results` dict, replacing the unfiltered version in state before downstream nodes read it
+- **Call site:** `rerank_results()` is a helper function in `agent.py` called at the **end of `search_node`**, after all HTTP searches complete. `search_node` calls it and returns the filtered dict as `{"search_results": filtered}`. It is not a separate graph node.
+- **Zero-results handling:** if all queries return empty results (API down or no matches), re-ranking is skipped and downstream nodes receive empty search_results — this is a valid no-op path that produces a zip with empty `.mcp.json` and no skills/agents
 
 This re-ranking applies to both `search_mcp` and `search_skills` results. `search_plugins` remains a stub.
+
+`tools.py` gains no new LLM logic — HTTP API functions only, consistent with current pattern.
 
 ---
 
@@ -162,7 +205,7 @@ This re-ranking applies to both `search_mcp` and `search_skills` results. `searc
 }
 ```
 
-Fields are domain-driven. The LLM is given the domain, pain_points, and daily_workflows to produce a tailored JSON.
+Fields are domain-driven. The LLM is given domain, pain_points, and daily_workflows to produce a tailored JSON. If the domain is `others` and no signal is extracted, an empty `permissions.allow`, no hooks, and default model are used.
 
 ### `generate_claude_md_node` output: `CLAUDE.md`
 
@@ -182,9 +225,10 @@ Sections in the generated `CLAUDE.md`:
 
 | File | Change |
 |---|---|
-| `agent/state.py` | Add `domain`, `pain_points`, `daily_workflows` to `AgentState.context` schema |
-| `agent/agent.py` | Update `SYSTEM_PROMPT` with domain-aware question banks; add `generate_settings_node`, `generate_claude_md_node`; update graph edges; improve query expansion in `search_node`; add re-ranking step |
-| `agent/tools.py` | No structural changes; re-ranking logic added as a new function |
+| `agent/state.py` | Add `settings_json: str \| None` and `claude_md: str \| None` as top-level `AgentState` fields; `domain`, `pain_points`, `daily_workflows` added to `context` dict (runtime, not typed) |
+| `agent/agent.py` | Update `SYSTEM_PROMPT` with domain-aware question banks (4-question max); remove `action == "build_zip"` branch from `decide_node`; update `route()` to remove `"build"` case; update `build_graph()` to remove `"build_zip"` from conditional edge targets and add fixed edges for new nodes; add `generate_settings_node`, `generate_claude_md_node`, `rerank_results()` helper (called inside `search_node`); update `SELECT_SUBAGENTS_PROMPT`, `CUSTOM_SUBAGENTS_PROMPT`, and their user messages to include `domain`, `pain_points`, `daily_workflows`; remove inline CLAUDE.md generation from `build_zip_node`; update `build_zip_node` to read from `state["settings_json"]` and `state["claude_md"]` with `None` fallbacks |
+| `agent/main.py` | Add `settings_json: None` and `claude_md: None` to initial state dict in `/chat` endpoint |
+| `agent/tools.py` | No changes |
 
 ---
 
