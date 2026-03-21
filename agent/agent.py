@@ -61,6 +61,7 @@ async def decide_node(state: AgentState) -> dict:
         except json.JSONDecodeError:
             parsed = {"action": "ask_question", "question": "프로젝트에 대해 더 알려주세요."}
         except Exception:
+            
             parsed = {"action": "ask_question", "question": "일시적인 오류가 발생했습니다. 다시 시도해 주세요."}
 
         action = parsed.get("action", "ask_question")
@@ -325,7 +326,7 @@ def build_graph(checkpointer):
     builder.add_node("build_zip", build_zip_node)
 
     builder.add_edge(START, "decide")
-    builder.add_conditional_edges("decide", route, ["search", "build_zip", END])
+    builder.add_conditional_edges("decide", route, ["search", END])
     builder.add_edge("search", "generate_subagents")
     builder.add_edge("generate_subagents", "build_zip")
     builder.add_edge("build_zip", END)
