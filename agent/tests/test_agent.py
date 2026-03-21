@@ -223,3 +223,60 @@ async def test_decide_node_emits_search_after_enough_context():
     assert len(result["pending_queries"]) == 5
     assert result["context"]["domain"] == "video"
     assert result["context"]["pain_points"] == ["render time is too long"]
+
+
+@pytest.mark.asyncio
+async def test_rerank_results_filters_irrelevant():
+    from agent.agent import rerank_results
+
+    search_results = {
+        "remotion video": {
+            "mcp": [
+                {"name": "mcp-kubernetes", "description": "Kubernetes cluster manager"},
+                {"name": "mcp-ffmpeg", "description": "Video processing with ffmpeg"},
+            ],
+            "skills": [
+                {"name": "video-render", "content": "Render videos"},
+                {"name": "sql-pro", "content": "SQL queries"},
+            ],
+            "plugins": [],
+        }
+    }
+    context = {"domain": "video", "stack": ["Remotion"], "pain_points": ["slow renders"]}
+
+    mock_response = MagicMock()
+    mock_response.content = json.dumps(["mcp-ffmpeg", "video-render"])
+
+    with patch.object(ChatAnthropic, "ainvoke", new_callable=AsyncMock, return_value=mock_response):
+        filtered = await rerank_results(search_results, context)
+
+    mcp_names = [s["name"] for s in filtered["remotion video"]["mcp"]]
+    skill_names = [s["name"] for s in filtered["remotion video"]["skills"]]
+    assert "mcp-ffmpeg" in mcp_names
+    assert "mcp-kubernetes" not in mcp_names
+    assert "video-render" in skill_names
+    assert "sql-pro" not in skill_names
+
+
+@pytest.mark.asyncio
+async def test_rerank_results_empty_input_is_noop():
+    from agent.agent import rerank_results
+
+    result = await rerank_results({}, {"domain": "coding"})
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_rerank_results_fallback_on_llm_error():
+    from agent.agent import rerank_results
+
+    search_results = {
+        "q": {"mcp": [{"name": "mcp-git"}], "skills": [], "plugins": []}
+    }
+    context = {"domain": "coding"}
+
+    with patch.object(ChatAnthropic, "ainvoke", new_callable=AsyncMock, side_effect=Exception("API error")):
+        filtered = await rerank_results(search_results, context)
+
+    # Should return original on error
+    assert filtered == search_results

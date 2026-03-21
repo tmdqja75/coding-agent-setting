@@ -91,6 +91,7 @@ async def decide_node(state: AgentState) -> dict:
 async def search_node(state: AgentState) -> dict:
     queries = state.get("pending_queries", [])
     results = dict(state.get("search_results", {}))
+    context = state.get("context", {})
 
     async def run_searches(query: str) -> dict:
         mcp, skills, plugins = await asyncio.gather(
@@ -103,7 +104,8 @@ async def search_node(state: AgentState) -> dict:
     for query in queries:
         results[query] = await run_searches(query)
 
-    return {"search_results": results}
+    filtered = await rerank_results(results, context)
+    return {"search_results": filtered}
 
 
 SELECT_SUBAGENTS_PROMPT = """You are a Claude Code configuration expert. You have access to a curated catalog of 120+ community subagents from the awesome-claude-code-subagents repository.
@@ -158,6 +160,46 @@ def _parse_json_response(raw: str) -> list:
         raw = raw.rstrip("`").strip()
     result = json.loads(raw)
     return result if isinstance(result, list) else []
+
+
+async def rerank_results(search_results: dict, context: dict) -> dict:
+    """Filter search results to keep only those relevant to the project context."""
+    if not search_results:
+        return search_results
+
+    all_results = []
+    for query, r in search_results.items():
+        for item in r.get("mcp", []):
+            all_results.append({"name": item.get("name", ""), "desc": item.get("description", "")})
+        for item in r.get("skills", []):
+            all_results.append({"name": item.get("name", ""), "desc": item.get("content", "")[:120]})
+
+    if not all_results:
+        return search_results
+
+    rerank_prompt = (
+        f"Project context: {json.dumps(context, ensure_ascii=False)}\n\n"
+        f"Evaluate these search results and return a JSON array of names to KEEP "
+        f"(only those genuinely useful for this project). Drop anything irrelevant.\n\n"
+        f"Results:\n{json.dumps(all_results, ensure_ascii=False)}\n\n"
+        f"Return ONLY a JSON array of name strings, e.g. [\"name1\", \"name2\"]"
+    )
+
+    try:
+        response = await llm.ainvoke([HumanMessage(content=rerank_prompt)])
+        keep_names = _parse_json_response(response.content)
+        keep_set = set(keep_names)
+    except Exception:
+        return search_results  # fallback: keep everything
+
+    filtered = {}
+    for query, r in search_results.items():
+        filtered[query] = {
+            "mcp": [i for i in r.get("mcp", []) if i.get("name") in keep_set],
+            "skills": [i for i in r.get("skills", []) if i.get("name") in keep_set],
+            "plugins": r.get("plugins", []),
+        }
+    return filtered
 
 
 async def generate_subagents_node(state: AgentState) -> dict:
