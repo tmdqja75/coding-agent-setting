@@ -16,28 +16,39 @@ from agent.tools import (
 
 llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0)
 
-SYSTEM_PROMPT = """You are a Claude Code setup assistant. Your job is to recommend and configure the best Claude Code components (MCP servers, skills, subagents) for the user's project.
+SYSTEM_PROMPT = """You are a Claude Code setup assistant. Configure the best Claude Code components for the user's project.
 
-You will conduct a conversation to understand the user's project. Ask targeted follow-up questions one at a time. Once you have enough information (project type, tech stack, main workflows), stop asking and proceed to search and build.
+Conduct a conversation in Korean following this EXACT sequence:
+
+STEP 1 — Domain detection (always the very first question):
+Ask: "어떤 유형의 작업에 Claude Code를 사용하실 예정인가요? (코딩 / 마케팅 / 영상 제작 / 리서치 / 혼합 / 기타)"
+
+STEP 2 — Domain-specific follow-up (ask 1-2 questions based on domain):
+- coding: (1) tech stack, (2) CI/CD and deployment target
+- marketing: (1) content types and target platforms, (2) research tools used
+- video production: (1) framework (Remotion/FFmpeg/other) and output format, (2) asset pipeline
+- research: (1) data sources and output format, (2) collaboration tools
+- mixed: (1) brief description of each area covered
+- others: ask "어떤 작업을 하고 계신지 설명해 주세요." then infer from response
+
+STEP 3 — Pain points (always the last question):
+Ask: "가장 시간이 많이 걸리거나 불편한 작업은 무엇인가요?"
+
+STEP 4 — After max 4 questions, emit search_apis with 5-6 targeted queries derived from
+the full context including domain, pain points, and workflows.
 
 Always respond with valid JSON in one of these formats:
 
 1. To ask a follow-up question:
-{"action": "ask_question", "question": "<your question in Korean>"}
+{"action": "ask_question", "question": "<question in Korean>"}
 
-2. To search the registries:
-{"action": "search_apis", "queries": ["<query1>", "<query2>"], "project_context": {"type": "<project type>", "stack": ["<tech1>"], "workflows": ["<workflow1>"]}}
+2. To search (after gathering enough context — always at most 4 questions):
+{"action": "search_apis", "queries": ["<specific query 1>", ..., "<specific query 6>"], "project_context": {"type": "<type>", "stack": ["<tech>"], "workflows": ["<workflow>"], "domain": "<domain>", "pain_points": ["<pain>"], "daily_workflows": ["<workflow>"]}}
 
-3. To build the zip (when you have enough context):
-{"action": "build_zip"}
-
-Keep questions concise and in Korean. Maximum 3 follow-up questions before building."""
+Keep questions concise and in Korean. Maximum 4 questions total before emitting search_apis."""
 
 
 async def decide_node(state: AgentState) -> dict:
-    # Build a working message list starting from checkpointed state.
-    # new_messages accumulates Q+A pairs added during this node execution
-    # so they can be committed to state when the node finally returns.
     working_messages = list(state["messages"])
     new_messages: list = []
 
@@ -63,17 +74,7 @@ async def decide_node(state: AgentState) -> dict:
                 "next_question": None,
             }
 
-        if action == "build_zip":
-            return {
-                "messages": new_messages,
-                "phase": "build",
-                "next_question": None,
-            }
-
-        # ask_question (or unknown action): interrupt and wait for user's answer.
-        # On resume, LangGraph replays this node from the top; interrupt() returns
-        # the recorded resume values in order, so the loop re-accumulates context
-        # correctly before pausing at the new (un-resumed) interrupt.
+        # ask_question (or unknown): interrupt and wait for user's answer.
         question = parsed.get("question") or "더 알려주세요."
         ai_msg = AIMessage(content=question)
         working_messages.append(ai_msg)
@@ -313,8 +314,6 @@ def route(state: AgentState) -> str:
     phase = state.get("phase", "clarify")
     if phase == "search":
         return "search"
-    elif phase == "build":
-        return "build_zip"
     return END
 
 
