@@ -318,3 +318,59 @@ async def test_rerank_results_fallback_on_llm_error():
 
     # Should return original on error
     assert filtered == search_results
+
+
+@pytest.mark.asyncio
+async def test_generate_settings_node_coding_domain():
+    from agent.agent import generate_settings_node
+
+    mock_response = MagicMock()
+    mock_response.content = json.dumps({
+        "permissions": {"allow": ["Bash(git*)", "Bash(npm*)", "Bash(python*)"]},
+        "hooks": {
+            "PostToolUse": [{"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "npm run lint"}]}]
+        },
+        "model": "claude-sonnet-4-6"
+    })
+
+    state = {
+        **INITIAL_STATE,
+        "context": {
+            "domain": "coding",
+            "type": "Next.js",
+            "stack": ["TypeScript", "React"],
+            "pain_points": ["slow tests"],
+            "daily_workflows": ["code review", "deploy"],
+        },
+    }
+
+    with patch.object(ChatAnthropic, "ainvoke", new_callable=AsyncMock, return_value=mock_response):
+        result = await generate_settings_node(state)
+
+    assert result["settings_json"] is not None
+    parsed = json.loads(result["settings_json"])
+    assert "permissions" in parsed
+    assert "Bash(git*)" in parsed["permissions"]["allow"]
+    assert parsed["model"] == "claude-sonnet-4-6"
+
+
+@pytest.mark.asyncio
+async def test_generate_settings_node_others_domain_fallback():
+    from agent.agent import generate_settings_node
+
+    mock_response = MagicMock()
+    mock_response.content = "not valid json {{"  # simulate LLM failure
+
+    state = {
+        **INITIAL_STATE,
+        "context": {"domain": "others", "type": "unknown"},
+    }
+
+    with patch.object(ChatAnthropic, "ainvoke", new_callable=AsyncMock, return_value=mock_response):
+        result = await generate_settings_node(state)
+
+    # Should fall back to safe defaults
+    assert result["settings_json"] is not None
+    parsed = json.loads(result["settings_json"])
+    assert parsed["permissions"]["allow"] == []
+    assert parsed["model"] == "claude-sonnet-4-6"

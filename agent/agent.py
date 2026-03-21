@@ -152,6 +152,71 @@ Rules:
 """
 
 
+GENERATE_SETTINGS_PROMPT = """You are a Claude Code configuration expert. Generate a .claude/settings.json file for this project.
+
+Project context:
+{context}
+
+Generate a JSON object with this exact structure:
+{{
+  "permissions": {{
+    "allow": ["<permission1>", ...]
+  }},
+  "hooks": {{
+    "PostToolUse": [{{ "matcher": "<matcher>", "hooks": [{{ "type": "command", "command": "<cmd>" }}] }}]
+  }},
+  "model": "<model-id>"
+}}
+
+Permission guidelines by domain:
+- coding: Bash(git*), Bash(npm*) or Bash(python*) based on stack; add Bash(docker*) if containerized
+- video: Bash(npx remotion*), Bash(ffmpeg*), Bash(npm*)
+- marketing: WebFetch(*), Bash(curl*)
+- research: WebFetch(*), Bash(python*)
+- mixed: union of permissions from all relevant domains described
+- others: infer from context description; fallback to empty allow list if unclear
+
+Hook guidelines:
+- coding: PostToolUse with matcher "Edit|Write" to run detected linter (e.g. "npm run lint", "ruff check .")
+- video: PostToolUse to validate render config if applicable
+- marketing, research: omit hooks entirely (use empty object {{}})
+- others: omit hooks unless clearly applicable from description
+
+Model guidelines:
+- research or complex analysis: "claude-opus-4-6"
+- coding or video production: "claude-sonnet-4-6"
+- marketing or simple content tasks: "claude-haiku-4-5-20251001"
+
+Return ONLY valid JSON, no markdown fences, no explanation."""
+
+
+_SETTINGS_FALLBACK = json.dumps({
+    "permissions": {"allow": []},
+    "hooks": {},
+    "model": "claude-sonnet-4-6"
+}, indent=2)
+
+
+async def generate_settings_node(state: AgentState) -> dict:
+    context = state.get("context", {})
+    prompt = GENERATE_SETTINGS_PROMPT.format(context=json.dumps(context, ensure_ascii=False))
+    try:
+        response = await llm.ainvoke(
+            [SystemMessage(content=prompt), HumanMessage(content="Generate the settings.json now.")]
+        )
+        # Validate it's parseable JSON
+        raw = response.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```", 2)[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.rstrip("`").strip()
+        json.loads(raw)  # validate
+        return {"settings_json": raw}
+    except Exception:
+        return {"settings_json": _SETTINGS_FALLBACK}
+
+
 def _parse_json_response(raw: str) -> list:
     """Parse a JSON array from an LLM response, handling markdown code fences."""
     raw = raw.strip()
