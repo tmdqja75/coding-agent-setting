@@ -259,6 +259,44 @@ async def test_rerank_results_filters_irrelevant():
 
 
 @pytest.mark.asyncio
+async def test_generate_subagents_node_uses_domain_context():
+    """generate_subagents_node should pass domain/pain_points to LLM prompts."""
+    from agent.agent import generate_subagents_node
+
+    # Mock both LLM calls: catalog selection returns [], custom also returns []
+    mock_response = MagicMock()
+    mock_response.content = "[]"
+
+    state = {
+        **INITIAL_STATE,
+        "context": {
+            "type": "video",
+            "domain": "video",
+            "stack": ["Remotion"],
+            "pain_points": ["slow renders"],
+            "daily_workflows": ["render video"],
+        },
+        "search_results": {},
+    }
+
+    call_args_list = []
+
+    async def capturing_ainvoke(messages, **kwargs):
+        call_args_list.append(messages)
+        return mock_response
+
+    with patch.object(ChatAnthropic, "ainvoke", new_callable=AsyncMock, side_effect=capturing_ainvoke):
+        await generate_subagents_node(state)
+
+    # At least one LLM call should contain domain info
+    all_content = " ".join(
+        m.content for call in call_args_list for m in call if hasattr(m, "content")
+    )
+    assert "video" in all_content
+    assert "slow renders" in all_content or "pain_points" in all_content
+
+
+@pytest.mark.asyncio
 async def test_rerank_results_empty_input_is_noop():
     from agent.agent import rerank_results
 

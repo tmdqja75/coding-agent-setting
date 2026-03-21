@@ -108,7 +108,7 @@ async def search_node(state: AgentState) -> dict:
     return {"search_results": filtered}
 
 
-SELECT_SUBAGENTS_PROMPT = """You are a Claude Code configuration expert. You have access to a curated catalog of 120+ community subagents from the awesome-claude-code-subagents repository.
+SELECT_SUBAGENTS_PROMPT = """You are a Claude Code configuration expert. You have access to a curated catalog of 120+ community subagents.
 
 Based on the user's project context, select the most relevant subagents from the catalog below.
 
@@ -116,14 +116,15 @@ Based on the user's project context, select the most relevant subagents from the
 {catalog_index}
 
 ## Instructions
-- Select 0-4 subagents that best match the project's tech stack and workflows
+- Select 0-4 subagents that best match the project's domain, tech stack, pain points, and workflows
 - Only select subagents that would genuinely help this specific project
+- For non-coding domains (marketing, video, research): prefer domain-specific agents over generic coding agents
 - If the project is very simple, select fewer or none
 - Return a JSON array of selected entries: [{{"name": "...", "category": "..."}}]
 - If no catalog subagents are relevant, return: []
 """
 
-CUSTOM_SUBAGENTS_PROMPT = """You are a Claude Code configuration expert. Some subagents have already been selected from a curated catalog. Now decide if additional CUSTOM subagents are needed for workflows not covered by the catalog selections.
+CUSTOM_SUBAGENTS_PROMPT = """You are a Claude Code configuration expert. Some subagents have been selected from a curated catalog. Now decide if additional CUSTOM subagents are needed for workflows not covered by the catalog selections.
 
 Already selected from catalog: {selected_names}
 
@@ -141,7 +142,8 @@ If custom subagents would fill genuine gaps, return 1-2 definitions:
 ]
 
 Rules:
-- Only generate custom subagents for workflows NOT covered by the already-selected catalog subagents
+- Only generate custom subagents for workflows NOT covered by catalog selections
+- Tailor agents to the actual domain (e.g. video rendering agents for video projects, not kubernetes agents)
 - Use the minimum tools needed (principle of least privilege)
 - model: "haiku" for fast/cheap lookup tasks, "sonnet" for reasoning tasks, "opus" for complex work
 - Available tools: Read, Write, Edit, Bash, Glob, Grep, Agent
@@ -220,6 +222,9 @@ async def generate_subagents_node(state: AgentState) -> dict:
 
     select_user_msg = f"""Project context: {json.dumps(context)}
 
+Domain: {context.get('domain', 'unknown')}
+Pain points: {context.get('pain_points', [])}
+Daily workflows: {context.get('daily_workflows', [])}
 Available MCP servers: {found_mcps}
 Available skills: {found_skills}
 Available plugins: {found_plugins}
@@ -264,6 +269,9 @@ Select the most relevant subagents from the catalog for this project."""
 
     custom_user_msg = f"""Project context: {json.dumps(context)}
 
+Domain: {context.get('domain', 'unknown')}
+Pain points: {context.get('pain_points', [])}
+Daily workflows: {context.get('daily_workflows', [])}
 Available MCP servers: {found_mcps}
 Available skills: {found_skills}
 
