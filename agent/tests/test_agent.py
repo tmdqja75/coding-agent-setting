@@ -374,3 +374,59 @@ async def test_generate_settings_node_others_domain_fallback():
     parsed = json.loads(result["settings_json"])
     assert parsed["permissions"]["allow"] == []
     assert parsed["model"] == "claude-sonnet-4-6"
+
+
+@pytest.mark.asyncio
+async def test_generate_claude_md_node_produces_markdown():
+    from agent.agent import generate_claude_md_node
+
+    mock_response = MagicMock()
+    mock_response.content = """# My Video Project
+
+## Project Overview
+A Remotion-based video renderer for marketing content.
+
+## Key Commands
+- `npm run render` — render video
+
+## Workflows
+When render times are slow, use incremental rendering.
+
+## Configured Components
+- MCP: mcp-ffmpeg
+- Subagents: remotion-renderer
+"""
+
+    state = {
+        **INITIAL_STATE,
+        "context": {
+            "domain": "video",
+            "type": "Remotion",
+            "stack": ["React"],
+            "pain_points": ["slow renders"],
+            "daily_workflows": ["render video"],
+        },
+        "search_results": {
+            "remotion": {"mcp": [{"name": "mcp-ffmpeg"}], "skills": [], "plugins": []}
+        },
+        "generated_agents": [("remotion-renderer", "---\nname: remotion-renderer\n---\n")],
+    }
+
+    with patch.object(ChatAnthropic, "ainvoke", new_callable=AsyncMock, return_value=mock_response):
+        result = await generate_claude_md_node(state)
+
+    assert result["claude_md"] is not None
+    assert "## Project Overview" in result["claude_md"]
+    assert "## Key Commands" in result["claude_md"]
+
+
+@pytest.mark.asyncio
+async def test_generate_claude_md_node_fallback_on_error():
+    from agent.agent import generate_claude_md_node
+
+    state = {**INITIAL_STATE, "context": {}, "search_results": {}, "generated_agents": []}
+
+    with patch.object(ChatAnthropic, "ainvoke", new_callable=AsyncMock, side_effect=Exception("API down")):
+        result = await generate_claude_md_node(state)
+
+    assert result["claude_md"] is None  # None signals build_zip to use fallback

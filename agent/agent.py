@@ -197,6 +197,65 @@ _SETTINGS_FALLBACK = json.dumps({
 }, indent=2)
 
 
+GENERATE_CLAUDE_MD_PROMPT = """You are a Claude Code configuration expert. Generate a rich, project-specific CLAUDE.md file.
+
+CLAUDE.md is loaded by Claude Code at the start of every session to understand how to work on this project.
+
+Project context: {context}
+MCP servers configured: {mcp_names}
+Skills configured: {skill_names}
+Subagents configured: {agent_names}
+
+Write a CLAUDE.md with these sections (include only sections that are relevant):
+
+# [Project Name derived from context, or "Claude Code Setup"]
+
+## Project Overview
+[2-3 sentences describing the project]
+
+## Key Commands
+[Domain-specific commands: build/dev/test for coding; render/export for video; etc. — only if known]
+
+## Workflows
+[Practical workflows that address the user's pain points — specific and actionable]
+
+## Configured Components
+[Brief description of what each configured MCP server, skill, and subagent does — omit if empty]
+
+## Conventions
+[Any constraints or conventions from the user's responses — omit if none]
+
+Write in English. Be specific and practical, not generic. Omit sections that have nothing meaningful to say."""
+
+
+async def generate_claude_md_node(state: AgentState) -> dict:
+    context = state.get("context", {})
+    search_results = state.get("search_results", {})
+    agent_files = state.get("generated_agents", [])
+
+    mcp_names = []
+    skill_names = []
+    for r in search_results.values():
+        mcp_names.extend(s.get("name") for s in r.get("mcp", [])[:3])
+        skill_names.extend(s.get("name") for s in r.get("skills", [])[:2])
+    agent_names = [name for name, _ in agent_files]
+
+    prompt = GENERATE_CLAUDE_MD_PROMPT.format(
+        context=json.dumps(context, ensure_ascii=False),
+        mcp_names=mcp_names,
+        skill_names=skill_names,
+        agent_names=agent_names,
+    )
+
+    try:
+        response = await llm.ainvoke(
+            [SystemMessage(content=prompt), HumanMessage(content="Generate the CLAUDE.md now.")]
+        )
+        return {"claude_md": response.content}
+    except Exception:
+        return {"claude_md": None}
+
+
 async def generate_settings_node(state: AgentState) -> dict:
     context = state.get("context", {})
     prompt = GENERATE_SETTINGS_PROMPT.format(context=json.dumps(context, ensure_ascii=False))
