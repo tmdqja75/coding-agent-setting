@@ -1,10 +1,12 @@
+import base64
 import json
 import zipfile
 import io
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langgraph.graph import StateGraph
 from agent import build_graph, generate_subagents_node, build_zip_node
 
 
@@ -17,7 +19,17 @@ INITIAL_STATE = {
     "next_question": None,
     "zip_bytes": None,
     "generated_agents": [],
+    "settings_json": None,
+    "claude_md": None,
 }
+
+
+def test_agent_state_has_new_fields():
+    from agent.state import AgentState
+    import typing
+    hints = typing.get_type_hints(AgentState)
+    assert "settings_json" in hints
+    assert "claude_md" in hints
 
 
 def test_graph_builds_without_error():
