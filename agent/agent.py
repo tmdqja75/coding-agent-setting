@@ -434,10 +434,12 @@ Generate custom subagents only for gaps not covered by the catalog selections, o
 async def build_zip_node(state: AgentState) -> dict:
     search_results = state.get("search_results", {})
     agent_files = state.get("generated_agents", [])
+    settings_json = state.get("settings_json")
+    claude_md = state.get("claude_md")
 
+    # Collect MCP servers and skill files from search results
     mcp_servers: list[dict] = []
     skill_files: list[tuple[str, str]] = []
-
     for query_results in search_results.values():
         mcp_servers.extend(query_results.get("mcp", [])[:3])
         for skill in query_results.get("skills", [])[:2]:
@@ -445,6 +447,7 @@ async def build_zip_node(state: AgentState) -> dict:
             if content:
                 skill_files.append((skill["name"], content))
 
+    # Build .mcp.json
     mcp_config: dict = {"mcpServers": {}}
     for server in mcp_servers:
         name = server.get("name", "unknown")
@@ -456,27 +459,15 @@ async def build_zip_node(state: AgentState) -> dict:
                 "args": ["-y", pkg.get("name", name)],
             }
 
-    claude_md_lines = [
-        "# Claude Code Setup",
-        "",
-        "This project was configured by the Claude Code Setup Agent.",
-        "",
-        "## MCP Servers",
-    ]
-    for server in mcp_servers:
-        claude_md_lines.append(f"- **{server.get('name')}**: {server.get('description', '')}")
-    claude_md_lines += ["", "## Skills"]
-    for name, _ in skill_files:
-        claude_md_lines.append(f"- {name}")
-    if agent_files:
-        claude_md_lines += ["", "## Subagents"]
-        for name, _ in agent_files:
-            claude_md_lines.append(f"- {name}")
+    # Apply fallbacks for None upstream outputs
+    final_claude_md = claude_md if claude_md is not None else "# Claude Code Setup\n"
+    final_settings = settings_json if settings_json is not None else "{}"
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(".mcp.json", json.dumps(mcp_config, indent=2, ensure_ascii=False))
-        zf.writestr("CLAUDE.md", "\n".join(claude_md_lines))
+        zf.writestr("CLAUDE.md", final_claude_md)
+        zf.writestr(".claude/settings.json", final_settings)
         for name, content in skill_files:
             zf.writestr(f".claude/skills/{name.replace('/', '_')}.md", content)
         for name, content in agent_files:

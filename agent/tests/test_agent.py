@@ -131,16 +131,17 @@ async def test_build_zip_includes_agent_files_when_generated():
         "generated_agents": [
             ("code-reviewer", "---\nname: code-reviewer\n---\n\nReview code.\n"),
         ],
+        "settings_json": None,
+        "claude_md": "# Setup\n\n## Subagents\n- code-reviewer",
     }
 
     result = await build_zip_node(state)
-    buf = io.BytesIO(result["zip_bytes"])
+    buf = io.BytesIO(base64.b64decode(result["zip_bytes"]))
     with zipfile.ZipFile(buf) as zf:
         names = zf.namelist()
         assert ".claude/agents/code-reviewer.md" in names
         assert "CLAUDE.md" in names
         claude_md = zf.read("CLAUDE.md").decode()
-        assert "## Subagents" in claude_md
         assert "code-reviewer" in claude_md
 
 
@@ -150,15 +151,58 @@ async def test_build_zip_omits_subagents_section_when_empty():
         **INITIAL_STATE,
         "search_results": {},
         "generated_agents": [],
+        "settings_json": None,
+        "claude_md": "# Setup\n",
     }
 
     result = await build_zip_node(state)
-    buf = io.BytesIO(result["zip_bytes"])
+    buf = io.BytesIO(base64.b64decode(result["zip_bytes"]))
     with zipfile.ZipFile(buf) as zf:
         names = zf.namelist()
         assert not any("agents" in n for n in names)
         claude_md = zf.read("CLAUDE.md").decode()
         assert "## Subagents" not in claude_md
+
+
+@pytest.mark.asyncio
+async def test_build_zip_reads_settings_and_claude_md_from_state():
+    state = {
+        **INITIAL_STATE,
+        "search_results": {},
+        "generated_agents": [],
+        "settings_json": '{"permissions": {"allow": ["Bash(git*)"]}, "hooks": {}, "model": "claude-sonnet-4-6"}',
+        "claude_md": "# My Project\n\n## Overview\nA test project.",
+    }
+
+    result = await build_zip_node(state)
+    buf = io.BytesIO(base64.b64decode(result["zip_bytes"]))
+    with zipfile.ZipFile(buf) as zf:
+        names = zf.namelist()
+        assert ".mcp.json" in names
+        assert "CLAUDE.md" in names
+        assert ".claude/settings.json" in names
+        assert zf.read("CLAUDE.md").decode() == "# My Project\n\n## Overview\nA test project."
+        settings = json.loads(zf.read(".claude/settings.json").decode())
+        assert "Bash(git*)" in settings["permissions"]["allow"]
+
+
+@pytest.mark.asyncio
+async def test_build_zip_fallback_when_state_fields_are_none():
+    state = {
+        **INITIAL_STATE,
+        "search_results": {},
+        "generated_agents": [],
+        "settings_json": None,
+        "claude_md": None,
+    }
+
+    result = await build_zip_node(state)
+    buf = io.BytesIO(base64.b64decode(result["zip_bytes"]))
+    with zipfile.ZipFile(buf) as zf:
+        claude_md = zf.read("CLAUDE.md").decode()
+        settings = json.loads(zf.read(".claude/settings.json").decode())
+        assert "# Claude Code Setup" in claude_md
+        assert settings == {}
 
 
 @pytest.mark.asyncio
