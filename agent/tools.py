@@ -155,7 +155,20 @@ async def search_mcp(query: str, limit: int = 10) -> list[dict]:
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.get(MCP_REGISTRY, params={"search": query, "limit": limit})
             r.raise_for_status()
-            return r.json().get("servers", [])
+            servers = r.json().get("servers", [])
+            # Flatten nested {"server": {...}, "_meta": {...}} to top-level fields
+            results = []
+            for entry in servers:
+                server = entry.get("server", {})
+                results.append({
+                    "name": server.get("name", ""),
+                    "description": server.get("description", ""),
+                    "repository": server.get("repository", {}),
+                    "remotes": server.get("remotes", []),
+                    "packages": server.get("packages", []),
+                    "version": server.get("version", ""),
+                })
+            return results
     except (httpx.HTTPStatusError, httpx.RequestError):
         return []
 
@@ -170,15 +183,15 @@ async def search_skills(query: str, limit: int = 10) -> list[dict]:
                 headers={"Authorization": f"Bearer {api_key}"},
             )
             r.raise_for_status()
-            hits = r.json().get("data", {}).get("data", [])
+            hits = r.json().get("data", {}).get("skills", [])
             results = []
             for hit in hits:
-                file_meta = hit.get("attributes", {}).get("file", {})
-                content_blocks = hit.get("content", [])
                 results.append({
-                    "name": file_meta.get("skill-name", ""),
-                    "skill_id": file_meta.get("skill-id", ""),
-                    "content": content_blocks[0]["text"] if content_blocks else "",
+                    "name": hit.get("name", ""),
+                    "skill_id": hit.get("id", ""),
+                    "description": hit.get("description", ""),
+                    "content": hit.get("description", ""),
+                    "githubUrl": hit.get("githubUrl", ""),
                 })
             return results
     except (httpx.HTTPStatusError, httpx.RequestError):

@@ -232,32 +232,32 @@ Write a CLAUDE.md with these sections (include only sections that are relevant):
 Write in English. Be specific and practical, not generic. Omit sections that have nothing meaningful to say."""
 
 
-async def generate_claude_md_node(state: AgentState) -> dict:
-    context = state.get("context", {})
-    search_results = state.get("search_results", {})
-    agent_files = state.get("generated_agents", [])
+# async def generate_claude_md_node(state: AgentState) -> dict:
+#     context = state.get("context", {})
+#     search_results = state.get("search_results", {})
+#     agent_files = state.get("generated_agents", [])
 
-    mcp_names = []
-    skill_names = []
-    for r in search_results.values():
-        mcp_names.extend(s.get("name") for s in r.get("mcp", [])[:3] if s.get("name"))
-        skill_names.extend(s.get("name") for s in r.get("skills", [])[:2] if s.get("name"))
-    agent_names = [name for name, _ in agent_files]
+#     mcp_names = []
+#     skill_names = []
+#     for r in search_results.values():
+#         mcp_names.extend(s.get("name") for s in r.get("mcp", [])[:3] if s.get("name"))
+#         skill_names.extend(s.get("name") for s in r.get("skills", [])[:2] if s.get("name"))
+#     agent_names = [name for name, _ in agent_files]
 
-    prompt = GENERATE_CLAUDE_MD_PROMPT.format(
-        context=json.dumps(context, ensure_ascii=False),
-        mcp_names=mcp_names,
-        skill_names=skill_names,
-        agent_names=agent_names,
-    )
+#     prompt = GENERATE_CLAUDE_MD_PROMPT.format(
+#         context=json.dumps(context, ensure_ascii=False),
+#         mcp_names=mcp_names,
+#         skill_names=skill_names,
+#         agent_names=agent_names,
+#     )
 
-    try:
-        response = await llm.ainvoke(
-            [SystemMessage(content=prompt), HumanMessage(content="Generate the CLAUDE.md now.")]
-        )
-        return {"claude_md": response.content}
-    except Exception:
-        return {"claude_md": None}
+#     try:
+#         response = await llm.ainvoke(
+#             [SystemMessage(content=prompt), HumanMessage(content="Generate the CLAUDE.md now.")]
+#         )
+#         return {"claude_md": response.content}
+#     except Exception:
+#         return {"claude_md": None}
 
 
 async def generate_settings_node(state: AgentState) -> dict:
@@ -321,6 +321,10 @@ async def rerank_results(search_results: dict, context: dict) -> dict:
         keep_set = set(keep_names)
     except Exception:
         return search_results  # fallback: keep everything
+
+    # If LLM returned nothing to keep but we had results, don't wipe everything
+    if not keep_set and all_results:
+        return search_results
 
     filtered = {}
     for query, r in search_results.items():
@@ -493,15 +497,15 @@ def build_graph(checkpointer):
     builder.add_node("search", search_node)
     builder.add_node("generate_subagents", generate_subagents_node)
     builder.add_node("generate_settings", generate_settings_node)
-    builder.add_node("generate_claude_md", generate_claude_md_node)
+    # builder.add_node("generate_claude_md", generate_claude_md_node)
     builder.add_node("build_zip", build_zip_node)
 
     builder.add_edge(START, "decide")
     builder.add_conditional_edges("decide", route, ["search", END])
     builder.add_edge("search", "generate_subagents")
     builder.add_edge("generate_subagents", "generate_settings")
-    builder.add_edge("generate_settings", "generate_claude_md")
-    builder.add_edge("generate_claude_md", "build_zip")
+    builder.add_edge("generate_settings", "build_zip")
+    # builder.add_edge("generate_claude_md", "build_zip")
     builder.add_edge("build_zip", END)
 
     return builder.compile(checkpointer=checkpointer)
